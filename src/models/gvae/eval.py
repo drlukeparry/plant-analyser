@@ -180,10 +180,13 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].endswith(".npy"):
         evaluate(sys.argv[1])
     else:
-        graph_paths = sorted(GRAPH_CACHE_DIR.glob("*.pt"))
+        prefix = sys.argv[1] if len(sys.argv) > 1 else None
+        pattern = f"{prefix}_*.pt" if prefix else "*.pt"
+        tag = prefix if prefix else "multi"
+        graph_paths = sorted(GRAPH_CACHE_DIR.glob(pattern))
         if not graph_paths:
             raise FileNotFoundError(
-                f"no cached graphs found in {GRAPH_CACHE_DIR} -- run "
+                f"no cached graphs matching {pattern!r} found in {GRAPH_CACHE_DIR} -- run "
                 "`uv run python -m src.graph.build_all_graphs` first"
             )
-        evaluate_multi(graph_paths)
+        evaluate_multi(graph_paths, tag=tag)

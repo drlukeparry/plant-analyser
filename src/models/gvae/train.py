@@ -163,12 +163,18 @@ if __name__ == "__main__":
         # Single-image mode, backward compatible with the Phase 3 first pass.
         train(sys.argv[1])
     else:
-        # Multi-image batch mode: train over every cached graph in
-        # outputs/phase2/graphs/ (see build_all_graphs.py).
-        graph_paths = sorted(GRAPH_CACHE_DIR.glob("*.pt"))
+        # Multi-image batch mode: train over cached graphs in
+        # outputs/phase2/graphs/ (see build_all_graphs.py). An optional
+        # dataset-prefix arg (e.g. "DO") restricts to that dataset only and
+        # tags the checkpoint accordingly -- used for same-dataset control
+        # runs isolating cross-dataset effects from scale-pooling artifacts.
+        prefix = sys.argv[1] if len(sys.argv) > 1 else None
+        pattern = f"{prefix}_*.pt" if prefix else "*.pt"
+        tag = prefix if prefix else "multi"
+        graph_paths = sorted(GRAPH_CACHE_DIR.glob(pattern))
         if not graph_paths:
             raise FileNotFoundError(
-                f"no cached graphs found in {GRAPH_CACHE_DIR} -- run "
+                f"no cached graphs matching {pattern!r} found in {GRAPH_CACHE_DIR} -- run "
                 "`uv run python -m src.graph.build_all_graphs` first"
             )
-        train_multi(graph_paths)
+        train_multi(graph_paths, tag=tag)
