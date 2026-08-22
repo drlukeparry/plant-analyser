@@ -1,0 +1,17 @@
+# Data / literature (large, not source-controlled per project convention)
+datasets/
+literature/
+outputs/
+models/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+
+# uv
+.uv-cache/
