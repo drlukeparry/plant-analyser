@@ -17,6 +17,14 @@ from src.models.gvae.train import GRAPH_CACHE_DIR, device
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase3"
 
+# Confirmed against literature/2212.03022v2.pdf (Ganz et al., INBD) Table 1 --
+# image counts match exactly (DO 22+42=64, EH 24+58=82, VM 22+45=67).
+DATASET_SPECIES = {
+    "DO": "Dryas octopetala",
+    "EH": "Empetrum hermaphroditum",
+    "VM": "Vaccinium myrtillus",
+}
+
 
 def pca_2d(x: np.ndarray) -> np.ndarray:
     """No sklearn dependency — plain SVD-based PCA."""
@@ -114,7 +122,13 @@ def evaluate_multi(graph_paths: list[Path], n_samples: int = 1600, num_hops: int
     model.load_state_dict(torch.load(OUT_DIR / f"gvae_{tag}.pt", map_location=dev))
     model.eval()
 
-    zs, mean_radial, mean_elong, mean_area, source_idx = [], [], [], [], []
+    # dataset/species label per graph, parsed from the cached filename prefix
+    # (e.g. "DO_0022" -> "DO") -- see DATASET_SPECIES for the confirmed
+    # species behind each code.
+    dataset_of_graph = [n.split("_")[0] for n in names]
+    species_codes = sorted(set(dataset_of_graph))
+
+    zs, mean_radial, mean_elong, mean_area, source_idx, dataset_idx = [], [], [], [], [], []
     radial_col = NODE_FEATURE_COLS_PX.index("radial_distance")
     elong_col = NODE_FEATURE_COLS_PX.index("elongation")
     area_col = NODE_FEATURE_COLS_PX.index("area")
@@ -134,19 +148,21 @@ def evaluate_multi(graph_paths: list[Path], n_samples: int = 1600, num_hops: int
             mean_elong.append(sub_x_raw[:, elong_col].mean().item())
             mean_area.append(sub_x_raw[:, area_col].mean().item())
             source_idx.append(gi)
+            dataset_idx.append(species_codes.index(dataset_of_graph[gi]))
 
     zs = np.array(zs)
     mean_radial = np.array(mean_radial)
     mean_elong = np.array(mean_elong)
     mean_area = np.array(mean_area)
     source_idx = np.array(source_idx)
+    dataset_idx = np.array(dataset_idx)
     print(f"collected {len(zs)} subgraph latents from {len(graphs)} images, z dim={zs.shape[1]}")
 
     proj = pca_2d(zs)
 
-    fig, axes = plt.subplots(1, 4, figsize=(24, 5.5))
+    fig, axes = plt.subplots(1, 5, figsize=(30, 5.5))
     for ax, color_by, name, cmap in zip(
-        axes,
+        axes[:4],
         [mean_radial, mean_elong, mean_area, source_idx],
         ["mean radial_distance", "mean elongation", "mean area", "source image (index)"],
         ["viridis", "viridis", "viridis", "tab20"],
@@ -154,6 +170,20 @@ def evaluate_multi(graph_paths: list[Path], n_samples: int = 1600, num_hops: int
         sc = ax.scatter(proj[:, 0], proj[:, 1], c=color_by, cmap=cmap, s=8, alpha=0.7)
         ax.set_title(f"latent space (PCA) colored by {name}")
         fig.colorbar(sc, ax=ax, fraction=0.03)
+
+    # dataset/species panel: discrete legend, not a colorbar, since there are
+    # only len(species_codes) categories -- this is the panel that visually
+    # confirms (or refutes) whether the between-image variance found earlier
+    # is a genuine species-level separation.
+    ax = axes[4]
+    palette = plt.get_cmap("tab10").colors
+    for i, code in enumerate(species_codes):
+        m = dataset_idx == i
+        label = f"{code} ({DATASET_SPECIES.get(code, 'unknown')})"
+        ax.scatter(proj[m, 0], proj[m, 1], s=8, alpha=0.7, color=palette[i % 10], label=label)
+    ax.set_title("latent space (PCA) colored by species")
+    ax.legend(fontsize=7, markerscale=2, loc="best")
+
     fig.tight_layout()
     out_path = OUT_DIR / f"latent_space_pca_{tag}.png"
     fig.savefig(out_path, dpi=150)
@@ -162,18 +192,32 @@ def evaluate_multi(graph_paths: list[Path], n_samples: int = 1600, num_hops: int
     corr = np.corrcoef(proj[:, 0], mean_radial)[0, 1]
     print(f"corr(latent PC1, mean radial_distance) = {corr:.3f}")
 
+    def between_var_frac(group_idx, n_groups):
+        grand_mean = proj[:, 0].mean()
+        between_var = sum(
+            (proj[group_idx == g, 0].mean() - grand_mean) ** 2 * (group_idx == g).sum()
+            for g in range(n_groups) if (group_idx == g).any()
+        ) / len(proj)
+        return between_var / proj[:, 0].var()
+
     # source-image ANOVA-style check: how much of PC1's variance is
     # "explained" by which image a subgraph came from, vs. by composition.
-    grand_mean = proj[:, 0].mean()
-    between_var = sum(
-        (proj[source_idx == gi, 0].mean() - grand_mean) ** 2 * (source_idx == gi).sum()
-        for gi in range(len(graphs)) if (source_idx == gi).any()
-    ) / len(proj)
-    total_var = proj[:, 0].var()
+    img_frac = between_var_frac(source_idx, len(graphs))
     print(f"fraction of PC1 variance between source images (vs. within) = "
-          f"{between_var / total_var:.3f} (near 0 = latent space ignores image identity)")
+          f"{img_frac:.3f} (near 0 = latent space ignores image identity)")
 
-    return {"corr_radial": corr, "between_image_var_frac": between_var / total_var}
+    # Same check grouped by species (3 groups instead of len(graphs)) --
+    # isolates species-level separation specifically, vs. per-image noise.
+    species_frac = between_var_frac(dataset_idx, len(species_codes))
+    print(f"fraction of PC1 variance between species (vs. within) = "
+          f"{species_frac:.3f} across {len(species_codes)} species "
+          f"({', '.join(f'{c}={DATASET_SPECIES.get(c, c)}' for c in species_codes)})")
+
+    return {
+        "corr_radial": corr,
+        "between_image_var_frac": img_frac,
+        "between_species_var_frac": species_frac,
+    }
 
 
 if __name__ == "__main__":
