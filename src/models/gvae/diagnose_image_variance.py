@@ -24,7 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from src.models.gvae.eval import pca_2d
 from src.models.gvae.model import GraphVAE
 from src.models.gvae.sampling import sample_subgraph
-from src.models.gvae.train import GRAPH_CACHE_DIR, device
+from src.graph.build_all_graphs import out_dir_for
+from src.models.gvae.train import device
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase3"
 DATASETS_ROOT = Path(__file__).resolve().parents[3] / "datasets"
@@ -52,9 +53,10 @@ def image_stats(name: str) -> dict:
     }
 
 
-def main(tag: str = "multi", n_per_image: int = 20, num_hops: int = 3, max_nodes: int = 300):
+def main(tag: str = "multi", variant: str = "raw", n_per_image: int = 20, num_hops: int = 3,
+         max_nodes: int = 300):
     dev = device()
-    graph_paths = sorted(GRAPH_CACHE_DIR.glob("*.pt"))
+    graph_paths = sorted(out_dir_for(variant).glob("*.pt"))
     names = [p.stem for p in graph_paths]
     print(f"loading {len(graph_paths)} cached graphs ...")
     graphs, node_dfs = [], []
@@ -158,4 +160,9 @@ def main(tag: str = "multi", n_per_image: int = 20, num_hops: int = 3, max_nodes
 
 
 if __name__ == "__main__":
-    main()
+    # tag identifies which checkpoint/scaler to load (e.g. "multi", "norm",
+    # "DO"); variant selects which graph cache to sample subgraphs from
+    # (must match how that checkpoint was trained).
+    tag = sys.argv[1] if len(sys.argv) > 1 else "multi"
+    variant = sys.argv[2] if len(sys.argv) > 2 else ("norm" if tag == "norm" else "raw")
+    main(tag=tag, variant=variant)

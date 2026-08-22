@@ -23,6 +23,7 @@ def extract_cell_features(
     min_minor_axis: float = 1.5,
     max_area_log_std: float | None = 3.0,
     um_per_pixel: float | None = None,
+    normalize_by_image_size: bool = False,
 ) -> pd.DataFrame:
     """Per-cell shape/size/orientation features, plus radial position relative
     to the whole section's centroid (natural coordinate system for a stem/tuber
@@ -54,6 +55,19 @@ def extract_cell_features(
     src/segmentation/do_dataset.py for the derivation/caveats for datasets/DO.
     Ratios (elongation, circularity, solidity, eccentricity) and angles are
     unaffected by pixel size and aren't duplicated.
+
+    If `normalize_by_image_size` is True, adds `*_norm` columns: size-related
+    columns divided by a characteristic image scale derived from `labels.shape`
+    (sqrt(H*W) for lengths, H*W for area) instead of an absolute pixel count.
+    This is the practical substitute for real um/pixel calibration, which
+    isn't available for any of datasets/DO|EH|VM (confirmed against the
+    source dataset's GitHub repo, paper, and CVPR supplementary -- see
+    PLAN.md Phase 3). Without this, `build_graph.py`'s node features are raw
+    pixel values, and pooling them across images of very different native
+    resolution (confirmed via src/models/gvae/diagnose_image_variance.py to
+    explain ~86% of the GVAE latent space's between-image variance) mostly
+    encodes which image's resolution a cell came from, not its real
+    (relative) size.
     """
     table = regionprops_table(labels, properties=PROPS)
     df = pd.DataFrame(table)
@@ -97,6 +111,17 @@ def extract_cell_features(
         df["major_axis_length_um"] = df["major_axis_length"] * um_per_pixel
         df["minor_axis_length_um"] = df["minor_axis_length"] * um_per_pixel
         df["radial_distance_um"] = df["radial_distance"] * um_per_pixel
+
+    if normalize_by_image_size:
+        img_h, img_w = labels.shape
+        img_area = float(img_h * img_w)
+        img_scale = np.sqrt(img_area)  # characteristic length, aspect-ratio-independent
+        df["area_norm"] = df["area"] / img_area
+        df["perimeter_norm"] = df["perimeter"] / img_scale
+        df["equivalent_diameter_norm"] = df["equivalent_diameter"] / img_scale
+        df["major_axis_length_norm"] = df["major_axis_length"] / img_scale
+        df["minor_axis_length_norm"] = df["minor_axis_length"] / img_scale
+        df["radial_distance_norm"] = df["radial_distance"] / img_scale
 
     return df
 

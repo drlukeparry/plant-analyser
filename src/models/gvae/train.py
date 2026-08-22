@@ -16,12 +16,13 @@ import torch.nn.functional as F
 from torch_geometric.utils import negative_sampling
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from src.graph.build_all_graphs import out_dir_for
 from src.graph.build_graph import build_graph
 from src.models.gvae.model import GraphVAE
 from src.models.gvae.sampling import SubgraphSampler
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase3"
-GRAPH_CACHE_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase2" / "graphs"
+GRAPH_CACHE_DIR = out_dir_for("raw")  # kept for backward-compat imports (eval.py etc.)
 
 
 def device():
@@ -164,17 +165,21 @@ if __name__ == "__main__":
         train(sys.argv[1])
     else:
         # Multi-image batch mode: train over cached graphs in
-        # outputs/phase2/graphs/ (see build_all_graphs.py). An optional
-        # dataset-prefix arg (e.g. "DO") restricts to that dataset only and
-        # tags the checkpoint accordingly -- used for same-dataset control
-        # runs isolating cross-dataset effects from scale-pooling artifacts.
-        prefix = sys.argv[1] if len(sys.argv) > 1 else None
+        # outputs/phase2/graphs[_norm]/ (see build_all_graphs.py). Remaining
+        # args (any order): "norm" selects the size-normalized graph cache
+        # (see build_graph.py's normalize_by_size) instead of raw pixel
+        # units; a dataset-prefix arg (e.g. "DO") restricts to that dataset
+        # only. Both tag the checkpoint accordingly.
+        args = sys.argv[1:]
+        variant = "norm" if "norm" in args else "raw"
+        prefix = next((a for a in args if a != "norm"), None)
+        graph_dir = out_dir_for(variant)
         pattern = f"{prefix}_*.pt" if prefix else "*.pt"
-        tag = prefix if prefix else "multi"
-        graph_paths = sorted(GRAPH_CACHE_DIR.glob(pattern))
+        tag = "_".join(t for t in (prefix, variant if variant == "norm" else None) if t) or "multi"
+        graph_paths = sorted(graph_dir.glob(pattern))
         if not graph_paths:
             raise FileNotFoundError(
-                f"no cached graphs matching {pattern!r} found in {GRAPH_CACHE_DIR} -- run "
-                "`uv run python -m src.graph.build_all_graphs` first"
+                f"no cached graphs matching {pattern!r} found in {graph_dir} -- run "
+                f"`uv run python -m src.graph.build_all_graphs {variant}` first"
             )
         train_multi(graph_paths, tag=tag)

@@ -37,6 +37,21 @@ _PX_TO_UM_COL = {
     "radial_distance": "radial_distance_um",
 }
 
+# When normalize_by_size is True (the practical substitute for um_per_pixel,
+# since no dataset here has real physical calibration -- see PLAN.md Phase
+# 3), size-related columns are swapped for their per-image-size-normalized
+# equivalents instead. This is what actually fixed the GVAE latent space's
+# between-image variance (~86% explained by raw resolution/cell-count
+# before this fix, see diagnose_image_variance.py).
+_PX_TO_NORM_COL = {
+    "area": "area_norm",
+    "perimeter": "perimeter_norm",
+    "equivalent_diameter": "equivalent_diameter_norm",
+    "major_axis_length": "major_axis_length_norm",
+    "minor_axis_length": "minor_axis_length_norm",
+    "radial_distance": "radial_distance_norm",
+}
+
 
 def _pixel_adjacency_pairs(labels: np.ndarray, wall_expand_px: int = 22) -> pd.DataFrame:
     """Shared-wall pixel counts between touching label pairs, via 4-connected
@@ -82,15 +97,26 @@ def _pixel_adjacency_pairs(labels: np.ndarray, wall_expand_px: int = 22) -> pd.D
     return df
 
 
-def build_graph(labels: np.ndarray, um_per_pixel: float | None = None) -> tuple[Data, pd.DataFrame]:
-    node_df = extract_cell_features(labels, um_per_pixel=um_per_pixel)
+def build_graph(
+    labels: np.ndarray, um_per_pixel: float | None = None, normalize_by_size: bool = False
+) -> tuple[Data, pd.DataFrame]:
+    if um_per_pixel is not None and normalize_by_size:
+        raise ValueError("um_per_pixel and normalize_by_size are alternative fixes for the same "
+                          "raw-pixel-scale problem -- pass at most one")
+
+    node_df = extract_cell_features(
+        labels, um_per_pixel=um_per_pixel, normalize_by_image_size=normalize_by_size
+    )
     node_df = node_df.sort_values("label").reset_index(drop=True)
     label_to_idx = {lab: i for i, lab in enumerate(node_df["label"])}
-    node_feature_cols = (
-        [_PX_TO_UM_COL.get(c, c) for c in NODE_FEATURE_COLS_PX]
-        if um_per_pixel is not None
-        else NODE_FEATURE_COLS_PX
-    )
+    if um_per_pixel is not None:
+        node_feature_cols = [_PX_TO_UM_COL.get(c, c) for c in NODE_FEATURE_COLS_PX]
+    elif normalize_by_size:
+        node_feature_cols = [_PX_TO_NORM_COL.get(c, c) for c in NODE_FEATURE_COLS_PX]
+    else:
+        node_feature_cols = NODE_FEATURE_COLS_PX
+
+    img_scale = np.sqrt(labels.shape[0] * labels.shape[1]) if normalize_by_size else None
 
     adj_df = _pixel_adjacency_pairs(labels)
 
@@ -132,6 +158,9 @@ def build_graph(labels: np.ndarray, um_per_pixel: float | None = None) -> tuple[
     if um_per_pixel is not None:
         shared_wall_arr = shared_wall_arr * um_per_pixel  # pixel-count proxy -> approx um
         centroid_dist_arr = centroid_dist_arr * um_per_pixel
+    elif normalize_by_size:
+        shared_wall_arr = shared_wall_arr / img_scale
+        centroid_dist_arr = centroid_dist_arr / img_scale
     edge_attr = torch.tensor(
         np.stack([shared_wall_arr, centroid_dist_arr, orient_delta, radial_alignment], axis=1),
         dtype=torch.float32,

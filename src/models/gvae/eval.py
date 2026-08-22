@@ -11,10 +11,11 @@ import torch
 from sklearn.manifold import TSNE
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from src.graph.build_all_graphs import out_dir_for
 from src.graph.build_graph import NODE_FEATURE_COLS_PX, build_graph
 from src.models.gvae.model import GraphVAE
 from src.models.gvae.sampling import sample_subgraph
-from src.models.gvae.train import GRAPH_CACHE_DIR, device
+from src.models.gvae.train import device
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase3"
 
@@ -241,13 +242,16 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1].endswith(".npy"):
         evaluate(sys.argv[1])
     else:
-        prefix = sys.argv[1] if len(sys.argv) > 1 else None
+        args = sys.argv[1:]
+        variant = "norm" if "norm" in args else "raw"
+        prefix = next((a for a in args if a != "norm"), None)
+        graph_dir = out_dir_for(variant)
         pattern = f"{prefix}_*.pt" if prefix else "*.pt"
-        tag = prefix if prefix else "multi"
-        graph_paths = sorted(GRAPH_CACHE_DIR.glob(pattern))
+        tag = "_".join(t for t in (prefix, variant if variant == "norm" else None) if t) or "multi"
+        graph_paths = sorted(graph_dir.glob(pattern))
         if not graph_paths:
             raise FileNotFoundError(
-                f"no cached graphs matching {pattern!r} found in {GRAPH_CACHE_DIR} -- run "
-                "`uv run python -m src.graph.build_all_graphs` first"
+                f"no cached graphs matching {pattern!r} found in {graph_dir} -- run "
+                f"`uv run python -m src.graph.build_all_graphs {variant}` first"
             )
         evaluate_multi(graph_paths, tag=tag)
