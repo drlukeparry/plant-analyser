@@ -18,4 +18,5 @@ dependencies = [
     "matplotlib>=3.9",
     "pandas>=2.2",
     "pytorch3dunet>=1.9.6",
+    "scikit-learn>=1.9.0",
 ]

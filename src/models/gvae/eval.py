@@ -8,6 +8,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from sklearn.manifold import TSNE
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from src.graph.build_graph import NODE_FEATURE_COLS_PX, build_graph
@@ -27,10 +28,22 @@ DATASET_SPECIES = {
 
 
 def pca_2d(x: np.ndarray) -> np.ndarray:
-    """No sklearn dependency — plain SVD-based PCA."""
+    """Plain SVD-based PCA -- linear, so its axes stay directly
+    interpretable for the corr()/variance-fraction checks below."""
     x = x - x.mean(axis=0, keepdims=True)
     u, s, vt = np.linalg.svd(x, full_matrices=False)
     return x @ vt[:2].T
+
+
+def tsne_2d(x: np.ndarray, perplexity: float = 30.0, seed: int = 0) -> np.ndarray:
+    """t-SNE projection -- nonlinear, better at revealing cluster structure
+    (e.g. does the latent space actually separate into distinct
+    per-species blobs) than PCA's linear projection can show, at the cost
+    of axes/distances that aren't otherwise meaningful. Used here purely
+    for visual cluster inspection, not for the quantitative variance-ratio
+    checks (those stay on PCA's linear axis)."""
+    perplexity = min(perplexity, (len(x) - 1) / 3)
+    return TSNE(n_components=2, perplexity=perplexity, init="pca", random_state=seed).fit_transform(x)
 
 
 def evaluate(labels_path: str, n_samples: int = 800, num_hops: int = 3, max_nodes: int = 300):
@@ -158,36 +171,40 @@ def evaluate_multi(graph_paths: list[Path], n_samples: int = 1600, num_hops: int
     dataset_idx = np.array(dataset_idx)
     print(f"collected {len(zs)} subgraph latents from {len(graphs)} images, z dim={zs.shape[1]}")
 
+    def plot_panels(proj, embedding_name, out_path):
+        fig, axes = plt.subplots(1, 5, figsize=(30, 5.5))
+        for ax, color_by, name, cmap in zip(
+            axes[:4],
+            [mean_radial, mean_elong, mean_area, source_idx],
+            ["mean radial_distance", "mean elongation", "mean area", "source image (index)"],
+            ["viridis", "viridis", "viridis", "tab20"],
+        ):
+            sc = ax.scatter(proj[:, 0], proj[:, 1], c=color_by, cmap=cmap, s=8, alpha=0.7)
+            ax.set_title(f"latent space ({embedding_name}) colored by {name}")
+            fig.colorbar(sc, ax=ax, fraction=0.03)
+
+        # dataset/species panel: discrete legend, not a colorbar, since there
+        # are only len(species_codes) categories -- this is the panel that
+        # visually confirms (or refutes) a genuine species-level separation.
+        ax = axes[4]
+        palette = plt.get_cmap("tab10").colors
+        for i, code in enumerate(species_codes):
+            m = dataset_idx == i
+            label = f"{code} ({DATASET_SPECIES.get(code, 'unknown')})"
+            ax.scatter(proj[m, 0], proj[m, 1], s=8, alpha=0.7, color=palette[i % 10], label=label)
+        ax.set_title(f"latent space ({embedding_name}) colored by species")
+        ax.legend(fontsize=7, markerscale=2, loc="best")
+
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=150)
+        print(f"saved {out_path}")
+
     proj = pca_2d(zs)
+    plot_panels(proj, "PCA", OUT_DIR / f"latent_space_pca_{tag}.png")
 
-    fig, axes = plt.subplots(1, 5, figsize=(30, 5.5))
-    for ax, color_by, name, cmap in zip(
-        axes[:4],
-        [mean_radial, mean_elong, mean_area, source_idx],
-        ["mean radial_distance", "mean elongation", "mean area", "source image (index)"],
-        ["viridis", "viridis", "viridis", "tab20"],
-    ):
-        sc = ax.scatter(proj[:, 0], proj[:, 1], c=color_by, cmap=cmap, s=8, alpha=0.7)
-        ax.set_title(f"latent space (PCA) colored by {name}")
-        fig.colorbar(sc, ax=ax, fraction=0.03)
-
-    # dataset/species panel: discrete legend, not a colorbar, since there are
-    # only len(species_codes) categories -- this is the panel that visually
-    # confirms (or refutes) whether the between-image variance found earlier
-    # is a genuine species-level separation.
-    ax = axes[4]
-    palette = plt.get_cmap("tab10").colors
-    for i, code in enumerate(species_codes):
-        m = dataset_idx == i
-        label = f"{code} ({DATASET_SPECIES.get(code, 'unknown')})"
-        ax.scatter(proj[m, 0], proj[m, 1], s=8, alpha=0.7, color=palette[i % 10], label=label)
-    ax.set_title("latent space (PCA) colored by species")
-    ax.legend(fontsize=7, markerscale=2, loc="best")
-
-    fig.tight_layout()
-    out_path = OUT_DIR / f"latent_space_pca_{tag}.png"
-    fig.savefig(out_path, dpi=150)
-    print(f"saved {out_path}")
+    print("running t-SNE ...")
+    proj_tsne = tsne_2d(zs)
+    plot_panels(proj_tsne, "t-SNE", OUT_DIR / f"latent_space_tsne_{tag}.png")
 
     corr = np.corrcoef(proj[:, 0], mean_radial)[0, 1]
     print(f"corr(latent PC1, mean radial_distance) = {corr:.3f}")
