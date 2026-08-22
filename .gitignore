@@ -1,8 +1,8 @@
 # Data / literature (large, not source-controlled per project convention)
-datasets/
-literature/
-outputs/
-models/
+/datasets/
+/literature/
+/outputs/
+/models/
 
 # Python
 __pycache__/
