@@ -1,4 +1,12 @@
-"""Phase 3 training loop: Graph-VAE on subgraphs sampled from the Phase 2 cell graph."""
+"""Phase 3 training loop: Graph-VAE on subgraphs sampled from the Phase 2 cell
+graph(s). Supports both single-image training (original Phase 3 first-pass
+mode) and multi-image batch training over cached graphs from
+build_all_graphs.py (SubgraphSampler already accepted a list of graphs; this
+just wires that up at the training-script level with global, not per-image,
+feature standardization -- pooling stats across images is required for the
+per-node feature distributions to be comparable when subgraphs are sampled
+across a mix of images with different cell-size/density distributions).
+"""
 import sys
 from pathlib import Path
 
@@ -13,6 +21,7 @@ from src.models.gvae.model import GraphVAE
 from src.models.gvae.sampling import SubgraphSampler
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase3"
+GRAPH_CACHE_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase2" / "graphs"
 
 
 def device():
@@ -24,34 +33,22 @@ def standardize(data, mean, std):
     return data
 
 
-def train(
-    labels_path: str,
-    steps: int = 800,
-    batch_size: int = 16,
-    lr: float = 1e-3,
-    beta: float = 0.01,
-    num_hops: int = 3,
-    max_nodes: int = 300,
+def _run_training_loop(
+    graphs: list,
+    in_dim: int,
+    steps: int,
+    batch_size: int,
+    lr: float,
+    beta: float,
+    num_hops: int,
+    max_nodes: int,
+    dev,
 ):
-    dev = device()
-    labels = np.load(labels_path)
-    print(f"building graph from {labels_path} ...")
-    full_data, node_df = build_graph(labels)
-    print(f"full graph: {full_data.num_nodes} nodes, {full_data.num_edges} edges")
-
-    mean = full_data.x.mean(dim=0, keepdim=True)
-    std = full_data.x.std(dim=0, keepdim=True).clamp(min=1e-6)
-    np.savez(OUT_DIR / "feature_scaler.npz", mean=mean.numpy(), std=std.numpy())
-
-    full_data.x = (full_data.x - mean) / std
-    sampler = SubgraphSampler([full_data], num_hops=num_hops, max_nodes=max_nodes)
-
-    model = GraphVAE(in_dim=full_data.x.size(1)).to(dev)
+    sampler = SubgraphSampler(graphs, num_hops=num_hops, max_nodes=max_nodes)
+    model = GraphVAE(in_dim=in_dim).to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
     history = []
-
     for step in range(steps):
         batch = sampler.sample_batch(batch_size).to(dev)
         opt.zero_grad()
@@ -80,12 +77,98 @@ def train(
             print(f"step {step:4d} loss={loss.item():.4f} node={node_loss.item():.4f} "
                   f"edge={edge_loss.item():.4f} kl={kl.item():.4f}")
 
+    return model, history
+
+
+def train(
+    labels_path: str,
+    steps: int = 800,
+    batch_size: int = 16,
+    lr: float = 1e-3,
+    beta: float = 0.01,
+    num_hops: int = 3,
+    max_nodes: int = 300,
+):
+    """Single-image training (original Phase 3 first-pass mode)."""
+    dev = device()
+    labels = np.load(labels_path)
+    print(f"building graph from {labels_path} ...")
+    full_data, node_df = build_graph(labels)
+    print(f"full graph: {full_data.num_nodes} nodes, {full_data.num_edges} edges")
+
+    mean = full_data.x.mean(dim=0, keepdim=True)
+    std = full_data.x.std(dim=0, keepdim=True).clamp(min=1e-6)
+    np.savez(OUT_DIR / "feature_scaler.npz", mean=mean.numpy(), std=std.numpy())
+    full_data.x = (full_data.x - mean) / std
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    model, history = _run_training_loop(
+        [full_data], full_data.x.size(1), steps, batch_size, lr, beta, num_hops, max_nodes, dev
+    )
+
     torch.save(model.state_dict(), OUT_DIR / "gvae.pt")
     np.save(OUT_DIR / "train_history.npy", np.array(history))
     print(f"saved model + history to {OUT_DIR}")
     return model, full_data, node_df, mean, std
 
 
+def train_multi(
+    graph_paths: list[Path],
+    steps: int = 1500,
+    batch_size: int = 16,
+    lr: float = 1e-3,
+    beta: float = 0.01,
+    num_hops: int = 3,
+    max_nodes: int = 300,
+    tag: str = "multi",
+):
+    """Batch training over cached per-image graphs (see build_all_graphs.py).
+    Loads all graphs up front (their combined size is small -- feature
+    matrices only, no pixel data) and standardizes with statistics pooled
+    across every image, not per-image, so subgraphs sampled from different
+    source images land in the same feature space.
+    """
+    dev = device()
+    print(f"loading {len(graph_paths)} cached graphs ...")
+    graphs = []
+    for p in graph_paths:
+        cached = torch.load(p, weights_only=False)
+        graphs.append(cached["data"])
+    total_nodes = sum(g.num_nodes for g in graphs)
+    total_edges = sum(g.num_edges for g in graphs)
+    print(f"loaded {len(graphs)} graphs: {total_nodes} total nodes, {total_edges} total edges")
+
+    all_x = torch.cat([g.x for g in graphs], dim=0)
+    mean = all_x.mean(dim=0, keepdim=True)
+    std = all_x.std(dim=0, keepdim=True).clamp(min=1e-6)
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    np.savez(OUT_DIR / f"feature_scaler_{tag}.npz", mean=mean.numpy(), std=std.numpy())
+
+    for g in graphs:
+        g.x = (g.x - mean) / std
+
+    model, history = _run_training_loop(
+        graphs, graphs[0].x.size(1), steps, batch_size, lr, beta, num_hops, max_nodes, dev
+    )
+
+    torch.save(model.state_dict(), OUT_DIR / f"gvae_{tag}.pt")
+    np.save(OUT_DIR / f"train_history_{tag}.npy", np.array(history))
+    print(f"saved model + history to {OUT_DIR} (tag={tag})")
+    return model, graphs, mean, std
+
+
 if __name__ == "__main__":
-    labels_path = sys.argv[1] if len(sys.argv) > 1 else "outputs/phase1/DO_0000_full_labels.npy"
-    train(labels_path)
+    if len(sys.argv) > 1 and sys.argv[1].endswith(".npy"):
+        # Single-image mode, backward compatible with the Phase 3 first pass.
+        train(sys.argv[1])
+    else:
+        # Multi-image batch mode: train over every cached graph in
+        # outputs/phase2/graphs/ (see build_all_graphs.py).
+        graph_paths = sorted(GRAPH_CACHE_DIR.glob("*.pt"))
+        if not graph_paths:
+            raise FileNotFoundError(
+                f"no cached graphs found in {GRAPH_CACHE_DIR} -- run "
+                "`uv run python -m src.graph.build_all_graphs` first"
+            )
+        train_multi(graph_paths)
