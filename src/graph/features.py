@@ -16,6 +16,15 @@ PROPS = [
     "centroid",
 ]
 
+_UM_COLS = [
+    "area_um2", "perimeter_um", "equivalent_diameter_um",
+    "major_axis_length_um", "minor_axis_length_um", "radial_distance_um",
+]
+_NORM_COLS = [
+    "area_norm", "perimeter_norm", "equivalent_diameter_norm",
+    "major_axis_length_norm", "minor_axis_length_norm", "radial_distance_norm",
+]
+
 
 def extract_cell_features(
     labels: np.ndarray,
@@ -98,6 +107,22 @@ def extract_cell_features(
 
     # elongation: major/minor axis ratio, >=1, higher = more elongated
     df["elongation"] = df["major_axis_length"] / df["minor_axis_length"].clip(lower=1e-6)
+
+    if len(df) == 0:
+        # Empty after filtering (e.g. a small patch crop with no cells
+        # clearing min_area/min_minor_axis) -- np.average below would raise
+        # ZeroDivisionError on an empty weights array. Return the empty
+        # frame with the rest of the expected columns present but empty,
+        # rather than crashing every caller that might hand this a crop.
+        for col in ["radial_distance", "angular_position", "radial_orientation_delta"]:
+            df[col] = pd.Series(dtype=float)
+        if um_per_pixel is not None:
+            for col in _UM_COLS:
+                df[col] = pd.Series(dtype=float)
+        if normalize_by_image_size:
+            for col in _NORM_COLS:
+                df[col] = pd.Series(dtype=float)
+        return df
 
     # radial coordinate system anchored on the whole-section centroid (area-weighted
     # mean of cell centroids is a reasonable proxy for the section center).
