@@ -240,7 +240,21 @@ Ran 1500 steps over 4,815,125 total nodes / 27,855,706 total edges (loss curve h
 
 **Net assessment:** this fix traded one artifact (raw cell size directly leaking resolution) for a partial reduction plus a redistribution onto other resolution-correlated channels (density, and indirectly color), at a real cost to the radial-position signal that was Phase 3's core exit criterion. Not a regression to discard -- the size-leak fix is real and worth keeping -- but not sufficient on its own either. Checkpoints: `outputs/phase3/gvae_norm.pt`, `latent_space_{pca,tsne}_norm.png`, `image_variance_diagnostic_norm.{csv,png}`.
 
-**Not yet done:** normalizing radial_distance by tissue extent (e.g. max cell radial_distance in that image) rather than whole-image pixel extent, to remove the cropping-margin confound identified above; investigating the cell_density/megapixels channel directly (possibly a `segment_classical` behavior that varies with image resolution, not a GVAE artifact -- worth checking whether cell count *per unit tissue area* actually varies with resolution or if this is a segmentation-parameter sensitivity); the optional auxiliary tissue-type classification head as a more direct anchor than any of these indirect fixes; reconstruction-quality metrics beyond the training loss curve.
+**v2 fix: normalize by tissue extent instead of image-canvas extent -- clearly the best result so far.** Switched `normalize_by_image_size`'s basis in `features.py`/`build_graph.py` from `sqrt(H*W)`/`H*W` (the raw image canvas, including any background margin) to the **99th-percentile `radial_distance` among that image's own cells** (roughly the specimen's own radius; 99th percentile rather than true max so one stray mis-segmented cell can't blow up the scale) as the one characteristic length used consistently for every size column, including the edge features (`shared_wall`, `centroid_dist`) in `build_graph.py`. Rebuilt `outputs/phase2/graphs_norm/` from scratch (the cache is keyed by filename only, not by feature-computation version, so a code change here requires deleting and rebuilding it) and retrained/re-evaluated `gvae_norm`. Three-way comparison:
+
+| | raw (pixel) | v1 (canvas-normalized) | v2 (tissue-extent-normalized) |
+|---|---|---|---|
+| corr(latent PC1, radial_distance) | -0.800 | -0.438 | **0.627** (sign is arbitrary) |
+| between-image variance frac | 0.354 | 0.362 | **0.213** |
+| between-species variance frac | 0.027 | 0.196 | 0.086 |
+| joint R^2, imaging covariates -> latent PC1 | 0.864 | 0.842 | **0.580** |
+| stain-color covariate correlation | all \|r\|<0.25 | up to 0.64 (new artifact) | all \|r\|<0.14 (artifact gone) |
+| mean_area_px / mean_equiv_diam_px corr | -0.27 / -0.26 | +0.13 / +0.02 | -0.22 / -0.29 (partially back, but weaker than raw) |
+| num_cells / megapixels corr | +0.78 / +0.72 | -0.59 / -0.82 | -0.69 / -0.59 (still the dominant remaining channel) |
+
+v2 is a genuine improvement on every axis that matters, not just a different tradeoff: between-image variance dropped substantially (35-36% -> 21.3%), the radial-position signal is back to a strong correlation (v1's regression is reversed, though still below raw's number), and the spurious stain-color correlation v1 introduced is gone. The remaining ~21% between-image variance is now dominated almost entirely by `num_cells`/`megapixels` (r=-0.69/-0.59) rather than being smeared across resolution, density, and color as in v1 -- a cleaner, more specific open question. Checkpoints: `outputs/phase3/gvae_norm.pt` (overwritten from v1; v1's numbers are preserved above for the record, not the files), `latent_space_{pca,tsne}_norm.png`, `image_variance_diagnostic_norm.{csv,png}`.
+
+**Not yet done:** the remaining `num_cells`/`megapixels` correlation -- worth checking whether cell count *per unit tissue area* (which v2's `area_norm` should already control for) still varies with resolution, which would point at a genuine `segment_classical` resolution-sensitivity (e.g. does the classical watershed pipeline systematically over- or under-segment at different native resolutions) rather than a remaining normalization gap; the optional auxiliary tissue-type classification head as a more direct anchor; reconstruction-quality metrics beyond the training loss curve.
 
 ---
 

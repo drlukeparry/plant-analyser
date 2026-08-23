@@ -57,17 +57,27 @@ def extract_cell_features(
     unaffected by pixel size and aren't duplicated.
 
     If `normalize_by_image_size` is True, adds `*_norm` columns: size-related
-    columns divided by a characteristic image scale derived from `labels.shape`
-    (sqrt(H*W) for lengths, H*W for area) instead of an absolute pixel count.
-    This is the practical substitute for real um/pixel calibration, which
-    isn't available for any of datasets/DO|EH|VM (confirmed against the
-    source dataset's GitHub repo, paper, and CVPR supplementary -- see
-    PLAN.md Phase 3). Without this, `build_graph.py`'s node features are raw
-    pixel values, and pooling them across images of very different native
+    columns divided by a characteristic *tissue* scale (the 99th-percentile
+    `radial_distance` among that image's own cells, i.e. roughly the
+    specimen's own radius) instead of an absolute pixel count. This is the
+    practical substitute for real um/pixel calibration, which isn't
+    available for any of datasets/DO|EH|VM (confirmed against the source
+    dataset's GitHub repo, paper, and CVPR supplementary -- see PLAN.md
+    Phase 3). Without this, `build_graph.py`'s node features are raw pixel
+    values, and pooling them across images of very different native
     resolution (confirmed via src/models/gvae/diagnose_image_variance.py to
     explain ~86% of the GVAE latent space's between-image variance) mostly
     encodes which image's resolution a cell came from, not its real
     (relative) size.
+
+    Deliberately normalizes by the tissue's own extent, not the raw image
+    canvas (sqrt(H*W)/H*W, tried first -- see PLAN.md Phase 3): images vary
+    in how tightly they're cropped around the specimen, so canvas-based
+    normalization let cropping margin leak into radial_distance_norm's
+    meaning and measurably weakened the radial-position signal (GVAE latent
+    correlation with radial_distance dropped from -0.80 to -0.44). Uses the
+    99th percentile rather than the true max so one stray mis-segmented
+    cell far from center can't blow up the scale for the whole image.
     """
     table = regionprops_table(labels, properties=PROPS)
     df = pd.DataFrame(table)
@@ -113,15 +123,27 @@ def extract_cell_features(
         df["radial_distance_um"] = df["radial_distance"] * um_per_pixel
 
     if normalize_by_image_size:
-        img_h, img_w = labels.shape
-        img_area = float(img_h * img_w)
-        img_scale = np.sqrt(img_area)  # characteristic length, aspect-ratio-independent
-        df["area_norm"] = df["area"] / img_area
-        df["perimeter_norm"] = df["perimeter"] / img_scale
-        df["equivalent_diameter_norm"] = df["equivalent_diameter"] / img_scale
-        df["major_axis_length_norm"] = df["major_axis_length"] / img_scale
-        df["minor_axis_length_norm"] = df["minor_axis_length"] / img_scale
-        df["radial_distance_norm"] = df["radial_distance"] / img_scale
+        # Normalize by the *tissue's* own extent, not the raw image canvas
+        # (sqrt(H*W)) -- images vary in how tightly they're cropped around
+        # the specimen (some with lots of surrounding white slide margin,
+        # some tight), so two images of the same real specimen size but
+        # different framing would otherwise get different normalization
+        # scales purely from margin, corrupting radial_distance_norm's
+        # meaning as "fraction of the way from pith to edge" in particular.
+        # tissue_radius (99th percentile, not max, so one stray
+        # far-flung mis-segmented cell can't blow up the scale for the
+        # whole image) is derived from the cells' own layout instead, and
+        # used consistently as the one characteristic length for every
+        # size column so they all stay on the same relative scale.
+        tissue_radius = float(np.percentile(df["radial_distance"], 99)) if len(df) > 1 else 1.0
+        tissue_radius = max(tissue_radius, 1e-6)
+        tissue_area = tissue_radius**2
+        df["area_norm"] = df["area"] / tissue_area
+        df["perimeter_norm"] = df["perimeter"] / tissue_radius
+        df["equivalent_diameter_norm"] = df["equivalent_diameter"] / tissue_radius
+        df["major_axis_length_norm"] = df["major_axis_length"] / tissue_radius
+        df["minor_axis_length_norm"] = df["minor_axis_length"] / tissue_radius
+        df["radial_distance_norm"] = df["radial_distance"] / tissue_radius
 
     return df
 

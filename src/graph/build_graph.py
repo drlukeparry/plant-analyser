@@ -116,7 +116,15 @@ def build_graph(
     else:
         node_feature_cols = NODE_FEATURE_COLS_PX
 
-    img_scale = np.sqrt(labels.shape[0] * labels.shape[1]) if normalize_by_size else None
+    # Same tissue-extent basis as extract_cell_features's *_norm columns
+    # (99th-percentile radial_distance), recomputed here from node_df's raw
+    # radial_distance so edge features (shared_wall, centroid_dist) land on
+    # the same relative scale as the node features -- not the image canvas.
+    tissue_scale = (
+        max(float(np.percentile(node_df["radial_distance"], 99)), 1e-6)
+        if normalize_by_size and len(node_df) > 1
+        else None
+    )
 
     adj_df = _pixel_adjacency_pairs(labels)
 
@@ -159,8 +167,8 @@ def build_graph(
         shared_wall_arr = shared_wall_arr * um_per_pixel  # pixel-count proxy -> approx um
         centroid_dist_arr = centroid_dist_arr * um_per_pixel
     elif normalize_by_size:
-        shared_wall_arr = shared_wall_arr / img_scale
-        centroid_dist_arr = centroid_dist_arr / img_scale
+        shared_wall_arr = shared_wall_arr / tissue_scale
+        centroid_dist_arr = centroid_dist_arr / tissue_scale
     edge_attr = torch.tensor(
         np.stack([shared_wall_arr, centroid_dist_arr, orient_delta, radial_alignment], axis=1),
         dtype=torch.float32,
