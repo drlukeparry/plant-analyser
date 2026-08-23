@@ -32,7 +32,23 @@ from src.graph.tessellate import tessellate_from_field
 
 OUT_DIR = Path(__file__).resolve().parents[2] / "outputs" / "phase4"
 COMPARE_FEATURES = ["area", "elongation", "orientation", "radial_distance"]
-SHIFT_THRESHOLD = 10.0
+# In std units (effect_size_shift), not % of mean -- see effect_size_shift's
+# docstring for why a %-of-mean threshold is unusable for near-zero-mean
+# features like orientation. 0.5 std is a moderate-effect-size cutoff
+# (Cohen's convention), not independently derived from this project's data.
+SHIFT_THRESHOLD = 0.5
+
+
+def effect_size_shift(a: np.ndarray, b: np.ndarray) -> float:
+    """Mean difference relative to the *original's std*, not its mean --
+    `pct_shift` blows up (divides by a near-zero denominator) for features
+    like `orientation`, whose true mean is near zero by symmetry (cells
+    point radially outward roughly as often as inward), so a tiny, harmless
+    absolute difference reads as a huge, alarming percentage. This is the
+    metric actually used for the pass/fail verdict; pct_shift is still
+    printed alongside it for features where it's meaningful (area,
+    radial_distance -- means well away from zero)."""
+    return abs(np.mean(b) - np.mean(a)) / (np.std(a) + 1e-9)
 
 
 def pct_shift(a: np.ndarray, b: np.ndarray) -> float:
@@ -84,8 +100,11 @@ def _round_trip_stats(labels: np.ndarray, node_df, field: np.ndarray, name: str,
     for feat in COMPARE_FEATURES:
         a, b = node_df[feat].values, recovered_df[feat].values
         shift = pct_shift(a, b)
-        report[feat] = shift
-        print(f"  [{name}] {feat}: mean shift = {shift:.1f}%")
+        effect = effect_size_shift(a, b)
+        report[feat] = effect
+        print(f"  [{name}] {feat}: mean shift = {shift:.1f}% of mean, "
+              f"{effect:.2f} std ({'PASS' if effect < SHIFT_THRESHOLD else 'FAIL'} "
+              f"vs. {SHIFT_THRESHOLD:.1f} std threshold)")
 
     fig, axes = plt.subplots(1, len(COMPARE_FEATURES), figsize=(5 * len(COMPARE_FEATURES), 4))
     for ax, feat in zip(axes, COMPARE_FEATURES):
@@ -103,8 +122,8 @@ def _round_trip_stats(labels: np.ndarray, node_df, field: np.ndarray, name: str,
     print(f"  [{name}] saved {out_path}")
 
     max_shift = max(report.values())
-    print(f"  [{name}] max feature mean shift: {max_shift:.1f}% "
-          f"({'PASS' if max_shift < SHIFT_THRESHOLD else 'FAIL'} vs. {SHIFT_THRESHOLD:.0f}% threshold)\n")
+    print(f"  [{name}] max feature effect-size shift: {max_shift:.2f} std "
+          f"({'PASS' if max_shift < SHIFT_THRESHOLD else 'FAIL'} vs. {SHIFT_THRESHOLD:.1f} std threshold)\n")
     report["max_shift"] = max_shift
     report["cell_count_shift"] = cell_count_shift
     report["avg_degree_shift"] = deg_shift
@@ -148,9 +167,11 @@ def validate(labels_path: str, patch_size: int = 256, n_patches: int = 6, seed: 
             patch_reports.append(r)
     if patch_reports:
         avg_max_shift = np.mean([r["max_shift"] for r in patch_reports])
+        n_patch_pass = sum(r["max_shift"] < SHIFT_THRESHOLD for r in patch_reports)
         print(f"  patch test: {len(patch_reports)}/{n_patches} usable patches, "
-              f"mean max-feature-shift = {avg_max_shift:.1f}% "
-              f"({'PASS' if avg_max_shift < SHIFT_THRESHOLD else 'FAIL'} vs. {SHIFT_THRESHOLD:.0f}% threshold)")
+              f"{n_patch_pass}/{len(patch_reports)} individually pass, "
+              f"mean max-feature-shift = {avg_max_shift:.2f} std "
+              f"({'PASS' if avg_max_shift < SHIFT_THRESHOLD else 'FAIL'} vs. {SHIFT_THRESHOLD:.1f} std threshold)")
     results["patches"] = patch_reports
 
     return results
