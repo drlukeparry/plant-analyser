@@ -323,6 +323,20 @@ v2 is a genuine improvement on every axis that matters, not just a different tra
 - **Deliverables:** `src/models/ddim/`, sampling script, generated-vs-real comparison report.
 - **Exit criteria (prototype-level):** generated patches are locally plausible (cell-like tessellation, reasonable size/elongation stats) — full novel whole-structure generation is explicitly out of scope until more data is collected (see Phase 6).
 
+**Status: first prototype pass done, exit criteria met at the proof-of-concept level.** Built across all 213 images from the same multi-image set Phases 3-4 used:
+
+- **`field.py::rasterize_field` gained `normalize_by_size`** (mirroring Phase 3's fix): divides the `sdf` channel by the same per-image tissue-radius scale and swaps in the `*_norm` size columns, so fields rasterized from different-resolution images land in a comparable space. Without this, Phase 5 would have reintroduced the exact resolution-leak bug Phase 3 spent significant effort diagnosing, one layer downstream.
+- **`build_patches.py`:** for each image, rasterizes the (normalized) field once, then samples 16 valid 128x128 patches (skipping mostly-background crops) and pairs each with a composition latent -- encoded via the trained Phase 3 GVAE (`gvae_norm.pt`) run on that patch's own local subgraph (cells whose centroid falls inside the patch window), not a placeholder. Result: 3,403 (field, latent) pairs from all 213 images, 0 failures, `outputs/phase5/patch_{fields,conds}.npy`.
+- **`model.py`:** small UNet (~1M params, per the plan's "start small" guidance) with FiLM conditioning -- each residual block's features get scaled/shifted by an embedding combining the diffusion timestep and the Phase 3 latent, the mechanism the plan specifies as an alternative to cross-attention.
+- **`train.py`:** standard DDPM/DDIM noise-prediction training (`diffusers.DDIMScheduler` for the forward noise process) for 3000 steps, batch size 16. Loss dropped from 1.13 -> ~0.03-0.05 and stayed there, a healthy curve for a first run.
+- **`sample.py`:** DDIM reverse sampling (50 inference steps) conditioned on a real patch's latent, run through Phase 4's `tessellate_from_field` to recover instance cells, compared against real-patch feature distributions (`area`, `elongation`, `orientation` -- `radial_distance` deliberately excluded from this comparison, per the Phase 4 finding that it's not a stable per-patch quantity at this crop scale).
+
+**Result across 4 generated samples:** all produce plausible, cell-like tessellations (10-13 irregular polygon-ish blobs per patch, no speckle-explosion or degenerate collapse) with `area` and `elongation` distributions visibly overlapping the real-patch distributions. `orientation` doesn't match well (real is roughly uniform, generated shows sharp spikes at a few angles) -- plausibly a small-sample artifact (only ~13 cells per generated patch means a 25-bin histogram is inherently spiky) rather than a genuine failure to learn orientation structure, but not yet confirmed either way (would need many more generated patches pooled together to check, the same way `sample.py` already pools ~200 real patches for the real-side comparison).
+
+**This meets the plan's own prototype-level bar** ("generated patches are locally plausible... reasonable size/elongation stats") on the first training run, without needing to iterate on the architecture or training length yet -- a genuinely positive result, not just "the loop runs."
+
+**Not yet done:** confirming whether the `orientation` mismatch is a real gap or a small-sample artifact (pool many generated patches, as noted above); graph-statistic comparison (avg degree etc., not just node features) between generated and real, per the plan's original exit-criteria list; longer training / larger model now that the short-run proof-of-concept has succeeded, to see if results improve or plateau; the plan's explicit caveat that full novel whole-structure generation is out of scope until more data is collected (still true -- this is patch-level only, per plan).
+
 ---
 
 ## Phase 6 — Data scale-up & generalization

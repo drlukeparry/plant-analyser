@@ -10,7 +10,8 @@ from src.graph.viz import paint_by_feature
 CHANNELS = ["sdf", "orientation", "equivalent_diameter", "radial_distance"]
 
 
-def rasterize_field(labels: np.ndarray, node_df, bg_clip: float = 50.0) -> np.ndarray:
+def rasterize_field(labels: np.ndarray, node_df, bg_clip: float = 50.0,
+                     normalize_by_size: bool = False) -> np.ndarray:
     """Returns a (H, W, 4) float32 field:
     - sdf: signed distance to nearest wall, positive inside a cell, negative
       in wall/background — a smooth representation of "cell-ness" a
@@ -35,6 +36,25 @@ def rasterize_field(labels: np.ndarray, node_df, bg_clip: float = 50.0) -> np.nd
     "1200px from a cell" was never useful for this representation's actual
     purpose (marking cell interior vs. not), so there's no real
     information lost, only an artificially inflated dynamic range.
+
+    `normalize_by_size=True` requires `node_df` to already carry the
+    `*_norm` columns (`extract_cell_features(..., normalize_by_image_size=True)`)
+    and additionally divides the `sdf` channel's values by the same
+    per-image tissue-radius scale, using `equivalent_diameter_norm`/
+    `radial_distance_norm` instead of the raw-pixel columns for the other
+    two size-related channels. Phase 3 found training across images of very
+    different native resolution with raw-pixel size features mostly encodes
+    which image a patch came from, not real relative size (see PLAN.md
+    Phase 3 -- ~86% of the GVAE's between-image latent variance traced to
+    this before the fix) -- Phase 5 trains across the same 213-image,
+    multi-resolution set, so the field needs the equivalent fix at rasterize
+    time or it would reintroduce the identical bug one layer downstream.
+    `bg_clip` is still applied in raw pixel units first (it's about the SDF's
+    dynamic range, not cross-image comparability), then the whole sdf array
+    is divided by the tissue scale. This is purely a value rescaling, not a
+    change to the array's spatial (pixel) dimensions, so `tessellate.py`'s
+    peak-detection is unaffected (it already normalizes per-connected-
+    component, not against an absolute scale).
     """
     interior = labels > 0
     dist_in = ndi.distance_transform_edt(interior)
@@ -42,8 +62,15 @@ def rasterize_field(labels: np.ndarray, node_df, bg_clip: float = 50.0) -> np.nd
     sdf = np.where(interior, dist_in, -dist_out).astype(np.float32)
 
     orientation = paint_by_feature(labels, node_df, "orientation").astype(np.float32)
-    size = paint_by_feature(labels, node_df, "equivalent_diameter").astype(np.float32)
-    radial = paint_by_feature(labels, node_df, "radial_distance").astype(np.float32)
+    if normalize_by_size:
+        tissue_radius = max(float(np.percentile(node_df["radial_distance"], 99)), 1e-6) \
+            if len(node_df) > 1 else 1.0
+        sdf = sdf / tissue_radius
+        size = paint_by_feature(labels, node_df, "equivalent_diameter_norm").astype(np.float32)
+        radial = paint_by_feature(labels, node_df, "radial_distance_norm").astype(np.float32)
+    else:
+        size = paint_by_feature(labels, node_df, "equivalent_diameter").astype(np.float32)
+        radial = paint_by_feature(labels, node_df, "radial_distance").astype(np.float32)
 
     return np.stack([sdf, orientation, size, radial], axis=-1)
 
