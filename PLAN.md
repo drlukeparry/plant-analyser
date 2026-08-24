@@ -358,6 +358,10 @@ v2 is a genuine improvement on every axis that matters, not just a different tra
 - `EH`/`VM` species/tissue identity is unconfirmed (see Phase 1 update) — if they turn out to be different species entirely, that's useful cross-species diversity for this phase's goal; if they're the same species as `DO` differently stained, they don't add real diversity even though they add image count.
 - Re-run Phases 1–5 at scale; re-validate exit criteria at each phase with the larger dataset.
 
+**Status update:** Phases 3-5 have now all been re-validated at the 213-image scale (see their own status sections) -- multi-image GVAE training, tissue-extent normalization, the Phase 4 field/tessellation fixes, and a first Phase 5 DDIM prototype all ran across the full `DO`+`EH`+`VM` set, not a single image.
+
+**`EH`/`VM` full-image visual QC spot-check done (previously flagged as not yet done).** Randomly sampled 3 images per species (`EH_0049/0053/0005`, `VM_0033/0065/0062`) and rendered full-image instance overlays. All 6 show clean, coherent disc shapes with the expected radial cell-size gradient (small cells near the outer edge, larger toward center) and no catastrophic segmentation failures, blank gaps, or obviously broken regions -- the zero-shot classical pipeline holds up at full-image scale on both datasets, not just the earlier crop-level check.
+
 ---
 
 ## Phase 6.5 — Learned segmenter via pseudo-labeling (deferred)

@@ -28,7 +28,7 @@ OUT_DIR = Path(__file__).resolve().parents[3] / "outputs" / "phase5"
 LOG_PATH = OUT_DIR / "build_patches_log.txt"
 
 PATCH_SIZE = 128
-PATCHES_PER_IMAGE = 16
+PATCHES_PER_IMAGE = 32  # doubled from the first-pass prototype (16) for more training diversity
 MIN_INTERIOR_FRAC = 0.15  # skip patches that are mostly background
 MIN_NODES = 8
 

@@ -27,7 +27,8 @@ def load_patches():
     return fields, conds
 
 
-def train(steps: int = 3000, batch_size: int = 16, lr: float = 2e-4, num_train_timesteps: int = 1000):
+def train(steps: int = 12000, batch_size: int = 32, lr: float = 2e-4, num_train_timesteps: int = 1000,
+          base_ch: int = 48):
     dev = device()
     fields, conds = load_patches()
     print(f"loaded {fields.shape[0]} patches, field shape {fields.shape[1:]}, cond dim {conds.shape[1]}")
@@ -41,7 +42,9 @@ def train(steps: int = 3000, batch_size: int = 16, lr: float = 2e-4, num_train_t
     np.savez(OUT_DIR / "field_scaler.npz", mean=mean.numpy(), std=std.numpy())
 
     n = fields_t.size(0)
-    model = FieldUNet(in_channels=fields_t.size(1), cond_dim=conds_t.size(1)).to(dev)
+    model = FieldUNet(in_channels=fields_t.size(1), cond_dim=conds_t.size(1), base_ch=base_ch).to(dev)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"model: base_ch={base_ch}, {n_params:,} params")
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     scheduler = DDIMScheduler(num_train_timesteps=num_train_timesteps)
 
@@ -68,6 +71,11 @@ def train(steps: int = 3000, batch_size: int = 16, lr: float = 2e-4, num_train_t
 
     torch.save(model.state_dict(), OUT_DIR / "ddim_unet.pt")
     np.save(OUT_DIR / "ddim_train_history.npy", np.array(history))
+    # base_ch must match at load time (sample.py/generate_cross_section.py) --
+    # save it alongside the checkpoint rather than hardcoding it a second
+    # place, so a capacity change here can't silently desync from callers.
+    np.savez(OUT_DIR / "ddim_config.npz", base_ch=base_ch,
+              in_channels=fields_t.size(1), cond_dim=conds_t.size(1))
     print(f"saved model + history to {OUT_DIR}")
     return model
 

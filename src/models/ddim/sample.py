@@ -31,12 +31,17 @@ COMPARE_FEATURES = ["area", "elongation", "orientation"]
 
 def load_model():
     dev = device()
-    fields, conds = load_patches()
     scaler = np.load(OUT_DIR / "field_scaler.npz")
     mean = torch.tensor(scaler["mean"])
     std = torch.tensor(scaler["std"])
 
-    model = FieldUNet(in_channels=fields.shape[-1], cond_dim=conds.shape[-1]).to(dev)
+    # base_ch (model capacity) is saved alongside the checkpoint by train.py
+    # so this can't silently desync if that changes -- see train.py's note.
+    config = np.load(OUT_DIR / "ddim_config.npz")
+    model = FieldUNet(
+        in_channels=int(config["in_channels"]), cond_dim=int(config["cond_dim"]),
+        base_ch=int(config["base_ch"]),
+    ).to(dev)
     model.load_state_dict(torch.load(OUT_DIR / "ddim_unet.pt", map_location=dev))
     model.eval()
     return model, mean, std, dev
