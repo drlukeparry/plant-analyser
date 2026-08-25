@@ -33,12 +33,14 @@ DIAM_IDX = FEATURE_NAMES.index("equivalent_diameter_norm")
 
 
 def build_ctrl_and_positions(center: np.ndarray, radius: float, diam_center: float, diam_edge: float,
-                              seed: int = 0, boundary_fn=None):
+                              seed: int = 0, boundary_fn=None, spacing_factor: float = 3.5,
+                              max_points: int | None = 100):
     inside = boundary_fn if boundary_fn is not None else circular_boundary(center, radius)
     size_fn = radial_size_field(center, radius, diam_center, diam_edge)
     flow_fn = tangential_flow_field(center)
     bbox = (center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius)
-    xy = seed_positions_blue_noise(inside, size_fn, bbox, seed=seed)
+    xy = seed_positions_blue_noise(inside, size_fn, bbox, spacing_factor=spacing_factor,
+                                    max_points=max_points, seed=seed)
 
     n = len(xy)
     ctrl_raw = np.zeros((n, 4), dtype=np.float32)  # CTRL_COLS order: size_gradient_target, _flow_sin, _flow_cos, coherence
@@ -57,12 +59,15 @@ def build_ctrl_and_positions(center: np.ndarray, radius: float, diam_center: flo
 
 def run(radius: float = 0.15, diam_center: float = 0.010, diam_edge: float = 0.003,
         num_inference_steps: int = 50, seed: int = 0, boundary_fn=None, boundary_patch=None,
-        shape_name: str = "circle", out_name: str = "d5_synthetic_infill_poscond.png"):
-    model, mean, std, ctrl_mean, ctrl_std, num_train_timesteps, dev = load_model()
+        shape_name: str = "circle", out_name: str = "d5_synthetic_infill_poscond.png",
+        spacing_factor: float = 3.5, max_points: int | None = 100, model_suffix: str = ""):
+    model, mean, std, ctrl_mean, ctrl_std, num_train_timesteps, dev = load_model(suffix=model_suffix)
     center = np.array([0.0, 0.0])
 
     xy, pos_raw, ctrl_raw, size_fn = build_ctrl_and_positions(center, radius, diam_center, diam_edge, seed,
-                                                                boundary_fn=boundary_fn)
+                                                                boundary_fn=boundary_fn,
+                                                                spacing_factor=spacing_factor,
+                                                                max_points=max_points)
     print(f"seeded {len(xy)} cell positions inside the synthetic boundary")
 
     pos_raw_t = torch.tensor(pos_raw, dtype=torch.float32)
