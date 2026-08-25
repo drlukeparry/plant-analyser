@@ -38,7 +38,8 @@ ATTR_IDX = [i for i in range(len(FEATURE_NAMES)) if i not in POS_IDX]
 
 def train(steps: int = 3000, batch_size: int = 16, n_max: int = 64, lr: float = 2e-4,
           num_train_timesteps: int = 1000, hidden_dim: int = 128, n_layers: int = 4,
-          n_heads: int = 4, tag: str = "norm", seed: int = 0):
+          n_heads: int = 4, tag: str = "norm", seed: int = 0,
+          num_hops: int = 3, max_nodes: int = 300, out_suffix: str = ""):
     torch.manual_seed(seed)
     dev = device()
     print("loading graphs + extracting control fields ...")
@@ -57,7 +58,7 @@ def train(steps: int = 3000, batch_size: int = 16, n_max: int = 64, lr: float = 
 
     attr_dim = len(ATTR_IDX)
     ctrl_dim = ctrls[0].size(1) + len(POS_IDX)  # original 4-dim ctrl + 2-dim position
-    sampler = FixedSetSampler(graphs, ctrls, n_max=n_max)
+    sampler = FixedSetSampler(graphs, ctrls, n_max=n_max, num_hops=num_hops, max_nodes=max_nodes)
 
     model = SetDenoiser(attr_dim=attr_dim, ctrl_dim=ctrl_dim, hidden_dim=hidden_dim,
                          n_layers=n_layers, n_heads=n_heads).to(dev)
@@ -91,14 +92,14 @@ def train(steps: int = 3000, batch_size: int = 16, n_max: int = 64, lr: float = 
             print(f"step {step:4d} loss={loss.item():.4f}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), OUT_DIR / "set_denoiser_poscond.pt")
-    np.save(OUT_DIR / "train_history_poscond.npy", np.array(history))
+    torch.save(model.state_dict(), OUT_DIR / f"set_denoiser_poscond{out_suffix}.pt")
+    np.save(OUT_DIR / f"train_history_poscond{out_suffix}.npy", np.array(history))
     np.savez(
-        OUT_DIR / "denoiser_config_poscond.npz",
+        OUT_DIR / f"denoiser_config_poscond{out_suffix}.npz",
         attr_dim=attr_dim, ctrl_dim=ctrl_dim, hidden_dim=hidden_dim,
         n_layers=n_layers, n_heads=n_heads, num_train_timesteps=num_train_timesteps,
     )
-    np.savez(OUT_DIR / "feature_scaler_poscond.npz", mean=mean.numpy(), std=std.numpy(),
+    np.savez(OUT_DIR / f"feature_scaler_poscond{out_suffix}.npz", mean=mean.numpy(), std=std.numpy(),
               ctrl_mean=ctrl_mean.numpy(), ctrl_std=ctrl_std.numpy())
     print(f"saved model + config + scaler to {OUT_DIR}")
     return model

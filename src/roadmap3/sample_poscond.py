@@ -19,17 +19,17 @@ from src.roadmap3.sample import COMPARE_FEATURES, SIZE_FEATURE
 from src.roadmap3.train_poscond import ATTR_IDX, FEATURE_NAMES, OUT_DIR, POS_IDX
 
 
-def load_model():
+def load_model(suffix: str = ""):
     dev = device()
-    config = np.load(OUT_DIR / "denoiser_config_poscond.npz")
+    config = np.load(OUT_DIR / f"denoiser_config_poscond{suffix}.npz")
     model = SetDenoiser(
         attr_dim=int(config["attr_dim"]), ctrl_dim=int(config["ctrl_dim"]),
         hidden_dim=int(config["hidden_dim"]), n_layers=int(config["n_layers"]),
         n_heads=int(config["n_heads"]),
     ).to(dev)
-    model.load_state_dict(torch.load(OUT_DIR / "set_denoiser_poscond.pt", map_location=dev))
+    model.load_state_dict(torch.load(OUT_DIR / f"set_denoiser_poscond{suffix}.pt", map_location=dev))
     model.eval()
-    scaler = np.load(OUT_DIR / "feature_scaler_poscond.npz")
+    scaler = np.load(OUT_DIR / f"feature_scaler_poscond{suffix}.npz")
     mean = torch.tensor(scaler["mean"])
     std = torch.tensor(scaler["std"])
     ctrl_mean = torch.tensor(scaler["ctrl_mean"])

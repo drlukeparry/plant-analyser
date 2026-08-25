@@ -140,6 +140,26 @@ This is not necessarily a failure of the model, but a mismatch between what this
 
 **Not a surprise given what the model was actually trained on:** `n_max=64` was the training batch size, and even the largest patch tested anywhere in this roadmap (the 124-cell DO_0000 subsection above) is 34x smaller than 6,748. Full self-attention has no positional/length restriction architecturally (per denoiser.py's own docstring), but nothing here suggests the *learned weights* generalize to a sequence this much longer than training — attention patterns, learned implicitly from ≤200-token examples, have no reason to remain sensible at 6,748 tokens, and this result confirms they don't. This is a length-generalization failure, a distinct (and more severe) problem from D5's spatial-shape generalization gap — worth keeping separate when deciding what to fix next, since the fix for one (e.g. training on more real-shaped point clouds) doesn't obviously address the other (training would need genuinely large real subgraphs, not just more of the same ≤200-node patches).
 
+### Tested alternative to D6: just train on longer sequences
+Before committing to D6's representation change, tested the simpler question directly: does training the *existing* architecture on much longer sequences close the length-generalization gap, rather than redesigning placement entirely?
+
+**Real image scale, checked first:** the 213 real images range from 5,446 to **90,309** cells (median 18,894) — training on literal whole images is impractical (O(N²) attention at 90k tokens is ~180x the cost measured at 6,748; and only 213 unique whole-image examples would be a severe overfitting risk vs. the effectively-unlimited augmented crops random subgraph sampling provides). Practical middle ground: much larger random crops (2,000 tokens via 25-hop subgraphs, calibrated empirically — hop count grows roughly quadratically with node count for this 2D tissue structure) instead of the previous 64-token training scale, keeping the crop-sampling augmentation benefit while cutting `DO_0000`'s length-extrapolation factor from 34x down to ~3.4x.
+
+**Retrained from scratch** (`train_poscond.py`, now parameterized for `num_hops`/`max_nodes`, `n_max=2000`, batch_size=4, same 3000-step budget, saved under a separate `_large` suffix): loss curve comparable (1.00 → ~0.05-0.27, noisier than the small-context run but still converging).
+
+**Result: real but partial improvement — confirms the diagnosis, doesn't solve it.**
+
+| metric (DO_0000 full scale, n=6,748) | n_max=64 (before) | n_max=2000 (this test) |
+|---|---|---|
+| whole-structure control-following | 0.024 | **0.102** (4.3x) |
+| `area_norm` effect size | 0.530 | 0.623 (worse) |
+| `elongation` effect size | 0.020 | 0.323 (worse) |
+| `orientation` effect size | 0.377 | 0.245 (better) |
+
+Control-following genuinely improved (4x), confirming training-length exposure is a real, causal factor in the length-generalization failure, not something else entirely. But it's a mixed result elsewhere (two of three distribution checks got worse) and the visual output (`outputs/roadmap3/do0000_full_structure_scatter_large.png`) still shows the same qualitative failure as before — collapsed to near-uniform small cells across the structure, not tracking real size variation. Nowhere near patch-scale quality (0.364).
+
+**Conclusion:** pushing training sequence length up helps incrementally but doesn't cheaply solve the problem — extrapolating from this result, closing the remaining ~3.4x gap (let alone the ~13x gap to the median real image, 18,894 cells) by continuing to scale `n_max` would need substantially more compute and still isn't guaranteed to fully close, since the relationship looks like partial mitigation, not a clean fix. This is the concrete evidence for preferring D6's scale-invariant approach (which removes the length dependency rather than trying to outrun it) over simply continuing to scale training length — though "just train longer" remains the cheaper lever to keep pulling if D6 proves harder to build than expected.
+
 ### D6 — Placement as a separate, scale-invariant problem (density field + point process)
 **Status: proposed, not started.** Motivated directly by the whole-structure findings above: every failure traced back to *placement*, not attribute quality — the free-joint model's self-generated positions collapsed catastrophically (D4/whole-structure section), and both attempted placement fixes so far (RePaint pinning, position-as-conditioning) only ever *consume* positions (real or D5's hand-specified blue noise), neither actually learns to place cells well when no reference positions exist. This phase reframes placement as its own, deliberately scale-invariant sub-problem, explicitly deferring size/orientation/shape generation to whatever this phase's output feeds into downstream.
 
