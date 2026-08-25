@@ -366,7 +366,12 @@ v2 is a genuine improvement on every axis that matters, not just a different tra
 
 Result: training loss converged substantially lower and more stably (~0.03-0.05 plateau before -> ~0.01-0.02 now). Re-ran the `DO_0000` cross-section extension with the new checkpoint (same grid/silhouette logic, unchanged): **848 cells vs. 813 before, but the qualitative difference is clearer than the count** -- visibly finer, denser, more tissue-like cell texture throughout the generated regions rather than the coarser blobs the first-pass model produced. Not independently re-validated against the `area`/`elongation`/`orientation` distribution comparison from the original prototype writeup (worth doing before treating this as fully confirmed better, not just visually different) -- flagged as the natural next check.
 
-**Not yet done:** the distributional re-validation just noted; overlap-blending between cross-section tiles to reduce the visible seams (still present, unaffected by this scale-up since it's a stitching-logic change, not a model-quality one); running the DDIM on `EH`/`VM` reference images too, not just `DO_0000`, now that the segmentation quality there is confirmed at full-image scale; the still-open `orientation` mismatch question from the original Phase 5 writeup.
+**Distributional re-validation done, quantitatively -- resolves the original `orientation` open question.** New `sample.py::main_pooled()`: generates many patches (30, not 1) and pools all their recovered cells before comparing against real-patch cells, instead of judging one ~8-13-cell patch by eye (the original prototype's comparison was noisy enough that a real small-sample artifact and a genuine gap were indistinguishable). Result, 266 pooled generated cells vs. 1,715 real cells:
+- `area`: effect size 0.21 std (PASS)
+- `elongation`: effect size 0.22 std (PASS)
+- `orientation`: effect size **0.04 std (PASS)** -- confirms the original prototype's spiky, mismatched-looking orientation histogram was exactly the small-sample artifact suspected at the time, not a real gap the model failed to learn. All three features are close, not just visually similar.
+
+**Not yet done:** overlap-blending between cross-section tiles to reduce the visible seams (still present, unaffected by this scale-up since it's a stitching-logic change, not a model-quality one); running the DDIM on `EH`/`VM` reference images too, not just `DO_0000`, now that the segmentation quality there is confirmed at full-image scale; graph-statistic comparison (avg degree etc.) still not done, per the plan's original Phase 5 exit-criteria list.
 
 ---
 

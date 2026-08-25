@@ -130,6 +130,65 @@ def main(n_samples: int = 4, seed: int = 0):
         evaluate_sample(field, real_node_df, OUT_DIR / f"generated_sample_{i}.png", f"sample{i}")
 
 
+def main_pooled(n_samples: int = 30, seed: int = 0):
+    """Pools cells across many generated patches before comparing
+    distributions, instead of judging a single ~8-13-cell patch by eye --
+    resolves whether a mismatch (e.g. orientation in the first Phase 5
+    prototype) is a real gap or just small-sample noise from one patch."""
+    import pandas as pd
+
+    model, mean, std, dev = load_model()
+    fields, conds = load_patches()
+
+    real_dfs = []
+    for f in fields[: min(len(fields), 200)]:
+        df = extract_cell_features(tessellate_from_field(f))
+        if len(df) > 0:
+            real_dfs.append(df)
+    real_node_df = pd.concat(real_dfs, ignore_index=True) if real_dfs else pd.DataFrame()
+
+    rng = np.random.default_rng(seed)
+    gen_dfs = []
+    total_cells = 0
+    for i in range(n_samples):
+        cond_idx = rng.integers(0, len(conds))
+        cond = torch.tensor(conds[cond_idx:cond_idx + 1], dtype=torch.float32)
+        field = generate(model, cond, mean, std, dev, seed=seed + i)
+        df = extract_cell_features(tessellate_from_field(field))
+        if len(df) > 0:
+            gen_dfs.append(df)
+            total_cells += len(df)
+        if (i + 1) % 10 == 0:
+            print(f"  {i+1}/{n_samples} patches generated, {total_cells} cells so far")
+    gen_node_df = pd.concat(gen_dfs, ignore_index=True) if gen_dfs else pd.DataFrame()
+    print(f"pooled {len(gen_node_df)} generated cells from {len(gen_dfs)}/{n_samples} patches "
+          f"vs. {len(real_node_df)} real cells from {len(real_dfs)} patches")
+
+    fig, axes = plt.subplots(1, len(COMPARE_FEATURES), figsize=(6 * len(COMPARE_FEATURES), 5))
+    for ax, feat in zip(axes, COMPARE_FEATURES):
+        a, b = real_node_df[feat].values, gen_node_df[feat].values
+        effect = abs(np.mean(b) - np.mean(a)) / (np.std(a) + 1e-9)
+        lo, hi = np.percentile(np.concatenate([a, b]), [1, 99])
+        bins = np.linspace(lo, hi, 40)
+        ax.hist(a, bins=bins, alpha=0.5, label=f"real (n={len(a)})", density=True)
+        ax.hist(b, bins=bins, alpha=0.5, label=f"generated (n={len(b)})", density=True)
+        ax.set_title(f"{feat} (effect size = {effect:.2f} std)")
+        ax.legend(fontsize=8)
+        print(f"  {feat}: real mean={a.mean():.3f}, generated mean={b.mean():.3f}, "
+              f"effect size = {effect:.2f} std ({'PASS' if effect < 0.5 else 'FAIL'} vs. 0.5 std)")
+    fig.suptitle(f"pooled generated-vs-real feature distributions ({len(gen_node_df)} generated cells, "
+                 f"{n_samples} patches)")
+    fig.tight_layout()
+    out_path = OUT_DIR / "generated_pooled_comparison.png"
+    fig.savefig(out_path, dpi=140)
+    print(f"saved {out_path}")
+    return gen_node_df, real_node_df
+
+
 if __name__ == "__main__":
-    n_samples = int(sys.argv[1]) if len(sys.argv) > 1 else 4
-    main(n_samples)
+    mode = sys.argv[1] if len(sys.argv) > 1 else "4"
+    if mode == "pooled":
+        n_samples = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+        main_pooled(n_samples)
+    else:
+        main(int(mode))
