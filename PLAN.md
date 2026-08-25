@@ -362,6 +362,12 @@ v2 is a genuine improvement on every axis that matters, not just a different tra
 
 **`EH`/`VM` full-image visual QC spot-check done (previously flagged as not yet done).** Randomly sampled 3 images per species (`EH_0049/0053/0005`, `VM_0033/0065/0062`) and rendered full-image instance overlays. All 6 show clean, coherent disc shapes with the expected radial cell-size gradient (small cells near the outer edge, larger toward center) and no catastrophic segmentation failures, blank gaps, or obviously broken regions -- the zero-shot classical pipeline holds up at full-image scale on both datasets, not just the earlier crop-level check.
 
+**DDIM scaled up, directly addressing Phase 5's "longer training / larger model... not yet done" note and the cross-section demo's known roughness.** `build_patches.py`: `PATCHES_PER_IMAGE` 16 -> 32 (6,815 patches from the same 213 images, up from 3,403). `train.py`: 3000 -> 12,000 steps, batch size 16 -> 32, model capacity (`base_ch`) 32 -> 48 (~1M -> 2.1M params) -- also now saves `ddim_config.npz` alongside the checkpoint so `sample.py`/`generate_cross_section.py` can't silently desync from a capacity change (they read it back instead of hardcoding).
+
+Result: training loss converged substantially lower and more stably (~0.03-0.05 plateau before -> ~0.01-0.02 now). Re-ran the `DO_0000` cross-section extension with the new checkpoint (same grid/silhouette logic, unchanged): **848 cells vs. 813 before, but the qualitative difference is clearer than the count** -- visibly finer, denser, more tissue-like cell texture throughout the generated regions rather than the coarser blobs the first-pass model produced. Not independently re-validated against the `area`/`elongation`/`orientation` distribution comparison from the original prototype writeup (worth doing before treating this as fully confirmed better, not just visually different) -- flagged as the natural next check.
+
+**Not yet done:** the distributional re-validation just noted; overlap-blending between cross-section tiles to reduce the visible seams (still present, unaffected by this scale-up since it's a stitching-logic change, not a model-quality one); running the DDIM on `EH`/`VM` reference images too, not just `DO_0000`, now that the segmentation quality there is confirmed at full-image scale; the still-open `orientation` mismatch question from the original Phase 5 writeup.
+
 ---
 
 ## Phase 6.5 — Learned segmenter via pseudo-labeling (deferred)
