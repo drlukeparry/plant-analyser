@@ -24,6 +24,20 @@ def circular_boundary(center: np.ndarray, radius: float):
     return inside
 
 
+def square_boundary(center: np.ndarray, half_side: float):
+    """Boundary-shape-agnostic test: nothing else in the pipeline (control
+    field sampling, blue-noise seeding, the model itself) assumes a
+    circular boundary -- swapping this one function is the only change
+    needed. `radial_size_field`/`tangential_flow_field` still measure
+    distance/angle from `center`, so corner regions (further from center
+    than the inscribed circle) saturate at the boundary-edge size value
+    rather than extrapolating past it -- a graceful, not a broken, edge
+    case given `radial_size_field`'s own r/radius clip to [0, 1]."""
+    def inside(p: np.ndarray) -> bool:
+        return np.max(np.abs(p - center)) <= half_side
+    return inside
+
+
 def radial_size_field(center: np.ndarray, radius: float, diam_center: float, diam_edge: float):
     """Target equivalent_diameter_norm as a function of position: larger
     near `center`, smaller near the boundary -- generalizes the single

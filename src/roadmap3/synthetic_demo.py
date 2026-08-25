@@ -33,8 +33,8 @@ DIAM_IDX = FEATURE_NAMES.index("equivalent_diameter_norm")
 
 
 def build_ctrl_and_positions(center: np.ndarray, radius: float, diam_center: float, diam_edge: float,
-                              seed: int = 0):
-    inside = circular_boundary(center, radius)
+                              seed: int = 0, boundary_fn=None):
+    inside = boundary_fn if boundary_fn is not None else circular_boundary(center, radius)
     size_fn = radial_size_field(center, radius, diam_center, diam_edge)
     flow_fn = tangential_flow_field(center)
     bbox = (center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius)
@@ -56,11 +56,13 @@ def build_ctrl_and_positions(center: np.ndarray, radius: float, diam_center: flo
 
 
 def run(radius: float = 0.15, diam_center: float = 0.010, diam_edge: float = 0.003,
-        num_inference_steps: int = 50, seed: int = 0):
+        num_inference_steps: int = 50, seed: int = 0, boundary_fn=None, boundary_patch=None,
+        shape_name: str = "circle", out_name: str = "d5_synthetic_infill_poscond.png"):
     model, mean, std, ctrl_mean, ctrl_std, num_train_timesteps, dev = load_model()
     center = np.array([0.0, 0.0])
 
-    xy, pos_raw, ctrl_raw, size_fn = build_ctrl_and_positions(center, radius, diam_center, diam_edge, seed)
+    xy, pos_raw, ctrl_raw, size_fn = build_ctrl_and_positions(center, radius, diam_center, diam_edge, seed,
+                                                                boundary_fn=boundary_fn)
     print(f"seeded {len(xy)} cell positions inside the synthetic boundary")
 
     pos_raw_t = torch.tensor(pos_raw, dtype=torch.float32)
@@ -78,13 +80,17 @@ def run(radius: float = 0.15, diam_center: float = 0.010, diam_edge: float = 0.0
     boundary_cell = np.array([is_boundary_cell(c, box) for c in cells])
     areas = np.array([polygon_area(c) if len(c) >= 3 else np.nan for c in cells])
 
+    def make_patch():
+        if boundary_patch is not None:
+            return boundary_patch()
+        return plt.Circle(center, radius, fill=False, color="black", linestyle="--")
+
     fig, axes = plt.subplots(1, 2, figsize=(13, 6))
     ax = axes[0]
     sc = ax.scatter(xy[:, 0], xy[:, 1], c=requested_diam, cmap="viridis", s=18)
-    circle = plt.Circle(center, radius, fill=False, color="black", linestyle="--")
-    ax.add_patch(circle)
+    ax.add_patch(make_patch())
     ax.set_aspect("equal")
-    ax.set_title("requested size field (input)")
+    ax.set_title(f"requested size field (input, {shape_name} boundary)")
     fig.colorbar(sc, ax=ax, label="requested equivalent_diameter_norm")
 
     ax = axes[1]
@@ -95,20 +101,20 @@ def run(radius: float = 0.15, diam_center: float = 0.010, diam_edge: float = 0.0
                              cmap="viridis", edgecolors="white", linewidths=0.4)
         ax.add_collection(pc)
     ax.scatter(points[:, 0], points[:, 1], s=3, color="red", zorder=3)
-    ax.add_patch(plt.Circle(center, radius, fill=False, color="black", linestyle="--"))
+    ax.add_patch(make_patch())
     m = 0.15 * radius
     ax.set_xlim(center[0] - radius - m, center[0] + radius + m)
     ax.set_ylim(center[1] - radius - m, center[1] + radius + m)
     ax.set_aspect("equal")
     ax.set_title(f"generated infill, corr(requested, generated size)={corr:.3f}")
 
-    fig.suptitle("D5: synthetic boundary + novel size gradient/flow field, not seen in training")
+    fig.suptitle(f"D5: synthetic {shape_name} boundary + novel size gradient/flow field, not seen in training")
     fig.tight_layout()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUT_DIR / "d5_synthetic_infill_poscond.png"
+    out_path = OUT_DIR / out_name
     fig.savefig(out_path, dpi=130)
     print(f"saved {out_path}")
-    return corr
+    return corr, len(xy)
 
 
 if __name__ == "__main__":
