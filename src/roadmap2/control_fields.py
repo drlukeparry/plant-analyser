@@ -43,6 +43,26 @@ def size_gradient_field(node_df: pd.DataFrame, k: int = 8) -> np.ndarray:
     return sizes[neighbor_idx].mean(axis=1)
 
 
+def local_density_field(node_df: pd.DataFrame, k: int = 8) -> np.ndarray:
+    """Leave-one-out local density estimate: the standard k-NN density
+    estimator, k / (pi * r_k^2), where r_k is the (leave-one-out) distance
+    to the k-th nearest neighbor in normalized tissue coordinates -- cells
+    per unit area of the local neighborhood. This is ROADMAP3's D6 input:
+    a real, per-cell "how dense is it here" label, the training target for
+    a placement/density-field model, in the same style and coordinate
+    system as `size_gradient_field`/`alignment_flow_field` above."""
+    xy = _normalized_xy(node_df)
+    n = len(node_df)
+    k_eff = min(k + 1, n)
+    tree = cKDTree(xy)
+    dist, _ = tree.query(xy, k=k_eff)
+    if k_eff == 1:
+        return np.ones(n)
+    r_k = dist[:, -1]  # leave-one-out: query includes self at index 0, so index -1 is the true k-th neighbor
+    r_k = np.clip(r_k, 1e-6, None)
+    return k / (np.pi * r_k ** 2)
+
+
 def alignment_flow_field(node_df: pd.DataFrame, k: int = 8) -> tuple[np.ndarray, np.ndarray]:
     """Leave-one-out local circular mean of `orientation` over each node's k
     nearest neighbors. `orientation` (skimage regionprops convention) is
