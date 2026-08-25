@@ -22,9 +22,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.roadmap3.geometry import cell_positions_and_weights, is_boundary_cell, power_diagram
-from src.roadmap3.inpaint import generate_fixed_positions
 from src.roadmap3.render import polygon_area
-from src.roadmap3.sample import FEATURE_NAMES, load_model
+from src.roadmap3.sample_poscond import FEATURE_NAMES, generate, load_model
 from src.roadmap3.synthetic import (circular_boundary, radial_size_field,
                                      seed_positions_blue_noise, tangential_flow_field)
 from src.roadmap3.train import OUT_DIR
@@ -64,13 +63,10 @@ def run(radius: float = 0.15, diam_center: float = 0.010, diam_edge: float = 0.0
     xy, pos_raw, ctrl_raw, size_fn = build_ctrl_and_positions(center, radius, diam_center, diam_edge, seed)
     print(f"seeded {len(xy)} cell positions inside the synthetic boundary")
 
-    pos_mean = mean[0, POS_IDX].numpy()
-    pos_std = std[0, POS_IDX].numpy()
-    known_pos_std = torch.tensor((pos_raw - pos_mean) / pos_std, dtype=torch.float32)
-    ctrl_std_t = torch.tensor((ctrl_raw - ctrl_mean.numpy()) / ctrl_std.numpy(), dtype=torch.float32)
-
-    x_gen = generate_fixed_positions(model, known_pos_std, ctrl_std_t, POS_IDX, mean, std, dev,
-                                      num_train_timesteps, num_inference_steps, seed=seed).numpy()
+    pos_raw_t = torch.tensor(pos_raw, dtype=torch.float32)
+    ctrl_raw_t = torch.tensor(ctrl_raw, dtype=torch.float32)
+    x_gen = generate(model, pos_raw_t, ctrl_raw_t, mean, std, ctrl_mean, ctrl_std, dev,
+                      num_train_timesteps, num_inference_steps, seed=seed)
 
     requested_diam = ctrl_raw[:, 0]
     generated_diam = x_gen[:, DIAM_IDX]
@@ -109,7 +105,7 @@ def run(radius: float = 0.15, diam_center: float = 0.010, diam_edge: float = 0.0
     fig.suptitle("D5: synthetic boundary + novel size gradient/flow field, not seen in training")
     fig.tight_layout()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUT_DIR / "d5_synthetic_infill.png"
+    out_path = OUT_DIR / "d5_synthetic_infill_poscond.png"
     fig.savefig(out_path, dpi=130)
     print(f"saved {out_path}")
     return corr
