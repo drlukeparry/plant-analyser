@@ -39,6 +39,16 @@ def train(steps: int = 3000, batch_size: int = 16, n_max: int = 64, lr: float = 
     std = all_x.std(dim=0, keepdim=True).clamp(min=1e-6)
     for g in graphs:
         g.x = (g.x - mean) / std
+
+    # Control fields must be standardized too, same as x -- size_gradient_target
+    # in particular is ~500x smaller in scale than the standardized attribute
+    # vector it's added to in the token embedding (see denoiser.py's
+    # input_proj(x) + ctrl_proj(ctrl)); left raw, the conditioning signal is
+    # numerically drowned out regardless of how long training runs.
+    all_ctrl = torch.cat(ctrls, dim=0)
+    ctrl_mean = all_ctrl.mean(dim=0, keepdim=True)
+    ctrl_std = all_ctrl.std(dim=0, keepdim=True).clamp(min=1e-6)
+    ctrls = [(c - ctrl_mean) / ctrl_std for c in ctrls]
     print(f"loaded {len(graphs)} graphs, {sum(g.num_nodes for g in graphs)} total nodes")
 
     attr_dim = graphs[0].x.size(1)
@@ -81,7 +91,8 @@ def train(steps: int = 3000, batch_size: int = 16, n_max: int = 64, lr: float = 
         attr_dim=attr_dim, ctrl_dim=ctrl_dim, hidden_dim=hidden_dim,
         n_layers=n_layers, n_heads=n_heads, num_train_timesteps=num_train_timesteps,
     )
-    np.savez(OUT_DIR / "feature_scaler.npz", mean=mean.numpy(), std=std.numpy())
+    np.savez(OUT_DIR / "feature_scaler.npz", mean=mean.numpy(), std=std.numpy(),
+              ctrl_mean=ctrl_mean.numpy(), ctrl_std=ctrl_std.numpy())
     print(f"saved model + config + scaler to {OUT_DIR}")
     return model
 

@@ -49,15 +49,18 @@ def load_model():
     scaler = np.load(OUT_DIR / "feature_scaler.npz")
     mean = torch.tensor(scaler["mean"])
     std = torch.tensor(scaler["std"])
+    ctrl_mean = torch.tensor(scaler["ctrl_mean"])
+    ctrl_std = torch.tensor(scaler["ctrl_std"])
     num_train_timesteps = int(config["num_train_timesteps"])
-    return model, mean, std, num_train_timesteps, dev
+    return model, mean, std, ctrl_mean, ctrl_std, num_train_timesteps, dev
 
 
 @torch.no_grad()
-def generate(model, ctrl: torch.Tensor, mean, std, dev, num_train_timesteps: int,
+def generate(model, ctrl: torch.Tensor, mean, std, ctrl_mean, ctrl_std, dev, num_train_timesteps: int,
              num_inference_steps: int = 50, seed: int = 0) -> torch.Tensor:
-    """ctrl: [N, ctrl_dim] real per-cell control-field values for one
-    subgraph. Returns generated (de-standardized) attribute vectors [N, attr_dim]."""
+    """ctrl: [N, ctrl_dim] real (raw, not yet standardized) per-cell
+    control-field values for one subgraph. Returns generated
+    (de-standardized) attribute vectors [N, attr_dim]."""
     scheduler = DDIMScheduler(num_train_timesteps=num_train_timesteps)
     scheduler.set_timesteps(num_inference_steps)
 
@@ -65,7 +68,8 @@ def generate(model, ctrl: torch.Tensor, mean, std, dev, num_train_timesteps: int
     attr_dim = mean.shape[-1]
     gen = torch.Generator(device="cpu").manual_seed(seed)
     x = torch.randn(1, n, attr_dim, generator=gen).to(dev)
-    ctrl_b = ctrl.unsqueeze(0).to(dev)
+    ctrl_std_b = (ctrl - ctrl_mean) / ctrl_std
+    ctrl_b = ctrl_std_b.unsqueeze(0).to(dev)
     active = torch.ones(1, n, device=dev)
 
     for t in scheduler.timesteps:
@@ -78,7 +82,7 @@ def generate(model, ctrl: torch.Tensor, mean, std, dev, num_train_timesteps: int
 
 
 def pooled_comparison(n_subgraphs: int = 60, seed: int = 1):
-    model, mean, std, num_train_timesteps, dev = load_model()
+    model, mean, std, ctrl_mean, ctrl_std, num_train_timesteps, dev = load_model()
     graphs, ctrls = load_graphs_with_ctrl("norm")
     for g in graphs:
         g.x = (g.x - mean) / std  # match training-time standardization for real-side comparison too
@@ -92,7 +96,8 @@ def pooled_comparison(n_subgraphs: int = 60, seed: int = 1):
         if x.size(0) < 8:
             continue
         x_real = (x * std + mean).numpy()  # de-standardize real side too, for a fair comparison
-        x_gen = generate(model, c, mean, std, dev, num_train_timesteps, seed=seed * 1000 + i).numpy()
+        x_gen = generate(model, c, mean, std, ctrl_mean, ctrl_std, dev, num_train_timesteps,
+                          seed=seed * 1000 + i).numpy()
         real_all.append(x_real)
         gen_all.append(x_gen)
         size_target_all.append(c[:, 0].numpy())  # size_gradient_target is CTRL_COLS[0]

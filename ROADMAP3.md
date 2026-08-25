@@ -53,7 +53,22 @@ DiT-style (Diffusion Transformer) design, adapted for a set instead of a pixel g
 - First run: small model, short schedule, prove loss goes down and DDIM sampling produces non-degenerate output (same exit bar Phase 5 used) before any scale-up decision.
 
 ### D3 — Unconditional / self-conditioned sanity check
-**Status: harness implemented, not yet run at a real training budget.** `src/roadmap3/sample.py` — DDIM reverse sampling conditioned on a real subgraph's own extracted control fields, pooled feature-distribution comparison (`area_norm`/`elongation`/`orientation`, same 0.5-std effect-size bar Phase 6 used) plus the control-following correlation check R2 introduced (`corr(size_gradient_target, generated equivalent_diameter_norm)`). Ran once against the 300-step smoke-test checkpoint from D2: distributional effect sizes were within bar (0.48/0.05/0.06), but control-following correlation was ≈0 (-0.005) — expected and uninformative at this training budget, not a negative result about the architecture. **Not yet done: an actual training run** (Phase 5/6-scale: thousands of steps, larger `hidden_dim`/`n_layers`) to get a real reading on whether control-following correlation rises the way R2's ablation showed for the GNN baseline.
+**Status: done for a first real training run (3000 steps, 1.26M params) — control-following works, matching R2's GNN baseline.** `src/roadmap3/sample.py` — DDIM reverse sampling conditioned on a real subgraph's own extracted control fields, pooled feature-distribution comparison (`area_norm`/`elongation`/`orientation`, same 0.5-std effect-size bar Phase 6 used) plus the control-following correlation check R2 introduced (`corr(size_gradient_target, generated equivalent_diameter_norm)`).
+
+**First full-budget run (3000 steps, `hidden_dim=128`, `n_layers=4`, loss 1.00 → 0.16) initially showed control-following correlation ≈0 (-0.007)** — investigated rather than accepted, since R2's GNN got 0.466 on the same check. Root cause: `size_gradient_target` (mean 0.0058, std 0.0022) was fed into `ctrl_proj` **unstandardized**, while it's added directly to `input_proj(x)` where `x` is standardized to unit variance (see `denoiser.py`) — the control signal was ~500x smaller in scale than what it was summed with, numerically drowned out regardless of training budget. This is a straightforward scaling bug, not evidence against the conditioning mechanism.
+
+**Fixed** (`train.py`/`sample.py`: `ctrl` now standardized the same way `x` is, scaler saved/reloaded alongside the model) **and retrained from scratch, same budget:**
+
+| check | before fix | after fix | R2 (GNN) reference |
+|---|---|---|---|
+| `corr(size_gradient_target, generated equivalent_diameter_norm)` | -0.007 | **0.458** | 0.466 |
+| `area_norm` effect size | 0.476 | 0.158 | — |
+| `elongation` effect size | 0.046 | 0.002 | — |
+| `orientation` effect size | 0.061 | 0.431 (within 0.5 bar, closest to it) | — |
+
+Control-following now lands within noise of R2's GNN result on the same metric, at a comparable first-pass training budget — a real, positive signal that the Transformer denoiser's per-token control-field conditioning is being used, not just tolerated. `orientation`'s effect size is the one distributional check closest to the 0.5-std bar and worth watching on any longer run, but not yet a failure.
+
+**Not yet done:** a longer/larger training run (this is still a first-pass budget, matching Phase 3/5's original single-run length, not a scaled-up run); a real train/held-out-image split (same caveat as R1/R2 — this is in-sample); D4's position-handling decision (this run diffuses position dims — `radial_distance_norm`/`angular_position` — along with everything else, it does not yet test the fixed-position/blue-noise-seeded variant).
 - Before testing arbitrary novel conditioning, first confirm the model can regenerate plausible *real-distribution* cell sets when conditioned on a real image's own extracted control fields (i.e. reproduce roughly what R2/Phase 6 already validate against) — same "does this even work" gate every prior phase used before testing generalization.
 - Validate with ROADMAP2's existing bar: pooled feature-distribution comparison (area/elongation/orientation) against real cells, effect-size threshold consistent with Phase 6's 0.5-std bar, plus the control-following check R2 introduced (does generated size track the requested gradient — correlation, not just distributional match).
 
