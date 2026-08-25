@@ -68,6 +68,38 @@ Before designing anything new, measure what's already there.
 - Decide, based on real numbers: is the existing decoder architecture good enough to build on, or does graph-space generation need a different decoder design entirely?
 - **This is cheap** (no new training, just evaluation) and directly resolves the biggest unknown before committing further effort.
 
+**Status: done.** `src/models/gvae/eval_decoder.py` — encodes real subgraphs to `mu` (deterministic, no sampling noise), decodes with the true `mu` and the real (input) edge topology per the model's own design (the decoder is only ever asked to reconstruct given real topology, not generate it from scratch — see `model.py`'s docstring) — then compares node-feature and edge reconstruction against the real subgraph. 302 subgraphs, 12,731 nodes, 123,196 balanced edge predictions, using `gvae_norm.pt` (the multi-image, tissue-extent-normalized checkpoint).
+
+**Caveat up front:** `gvae_norm.pt` was trained on subgraphs sampled from every cached image (`train_multi`, see PLAN.md Phase 3) — there is no held-out image split. This measures in-sample reconstruction (does the decoder reconstruct what it was fit to reconstruct at all?), not generalization to unseen images. Still a real and useful number, just not a generalization test.
+
+**Result — position reconstructs almost perfectly; intrinsic cell shape/size does not:**
+
+| feature | standardized MSE | corr(real, recon) |
+|---|---|---|
+| `radial_distance_norm` | 0.019 | **0.992** |
+| `angular_position` | 0.070 | **0.969** |
+| `radial_orientation_delta` | 0.506 | 0.715 |
+| `solidity` | 0.701 | 0.518 |
+| `major_axis_length_norm` | 0.939 | 0.438 |
+| `equivalent_diameter_norm` | 1.121 | 0.418 |
+| `circularity` | 0.914 | 0.401 |
+| `orientation` | 0.810 | 0.379 |
+| `perimeter_norm` | 1.105 | 0.377 |
+| `minor_axis_length_norm` | 1.199 | 0.377 |
+| `elongation` | 0.756 | 0.327 |
+| `area_norm` | 1.520 | 0.338 |
+| `eccentricity` | 0.958 | 0.287 |
+
+(reference point: standardized MSE ≈ 1.0 is what a decoder predicting the per-feature training mean for every node would score, since features are z-scored to unit variance — several features here are at or above that baseline, i.e. no better than predicting the mean.)
+
+**Edge (adjacency) reconstruction:** accuracy 0.729, precision 0.648, recall **1.000**, f1 0.787 — the near-perfect recall paired with mediocre precision means the decoder is close to predicting "these two nodes are adjacent" for almost every pair it's asked about (real or negative-sampled), rather than genuinely discriminating structure. Better than the 0.5 random baseline (edge/non-edge pairs are balanced 50/50 in this eval), but not a strong signal.
+
+**Visual confirmation** (`outputs/phase3/decoder_eval_norm.png`): `radial_distance_norm` and `angular_position` scatter tightly along the `y=x` line. `area_norm`, `orientation`, and `elongation` instead collapse into a narrow horizontal band near zero regardless of the real value — the decoder is producing something close to a constant/mean prediction for these, not a genuine per-node reconstruction.
+
+**Interpretation — likely explains why position reconstructs so well while shape doesn't:** `radial_distance`/`angular_position` are strongly spatially autocorrelated (neighboring cells in a k-hop subgraph have very similar radial position, since tissue is organized in roughly concentric bands) — so the decoder may be exploiting *local subgraph homogeneity* (predicting close to the subgraph's own local average position) rather than genuinely reconstructing each node's individual position from `z`. Intrinsic shape features (area, orientation, elongation) are far less spatially autocorrelated cell-to-cell, so the same "predict close to local average" strategy fails for them — consistent with the near-mean-baseline MSE scores above.
+
+**What this means for R2:** the current decoder, as trained, is **not yet a strong foundation for graph-space generation** — it can situate a node's rough position within a locally homogeneous neighborhood, but it does not yet reconstruct the intrinsic per-cell attributes (size, shape, orientation) that actually define individual cells. Before building R2's growth model on top of this decoder, either (a) the decoder needs targeted improvement (e.g. per-feature loss weighting, more capacity, or an architecture that removes the easy "predict the local mean" shortcut), or (b) R2's growth model should be designed to *not* depend on this decoder at all and instead predict cell attributes directly (which was already R2's plan — it doesn't reuse `GraphVAE.decode()`, only the encoder for optional style conditioning) — in which case this result mainly serves as a warning not to assume the existing decoder is reusable for anything beyond position-only tasks.
+
 ### R2 — Minimal viable graph generator: local growth model
 Start smaller than full autoregressive whole-structure generation.
 - Model: given a partial graph (some cells already placed) + the local control-field value(s) at the candidate position (target size, distance/direction to the nearest center — see "Final target specification" above) + optionally a GVAE-style composition latent for style, predict the next cell's attributes + which existing cell(s) it attaches to.
