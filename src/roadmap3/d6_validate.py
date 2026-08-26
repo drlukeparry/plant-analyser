@@ -118,6 +118,58 @@ def placement_check(image_names=("DO_0000", "EH_0049", "VM_0033"), seed: int = 0
     print(f"saved {out}")
 
 
+def placement_check_real_density(image_names=("DO_0000", "EH_0049", "VM_0033"), seed: int = 0):
+    """Same as placement_check, but samples from the REAL density raster
+    instead of the model's prediction -- isolates Finding 2 (does the
+    dart-throwing sampler under-fill even given a perfect density field?)
+    from Finding 1 (does the model predict the right density level?). If
+    under-filling persists here, it's purely a sampler problem; if it
+    mostly resolves, Finding 2 was actually downstream of Finding 1."""
+    fig, axes = plt.subplots(1, len(image_names), figsize=(4.5 * len(image_names), 4.2))
+    for col, name in enumerate(image_names):
+        cached = torch.load(out_dir_for("norm") / f"{name}.pt", weights_only=False)
+        node_df = cached["node_df"]
+        real_xy = _normalized_xy(node_df)
+        mask, real_density = rasterize_image(node_df)
+
+        def inside(p, mask=mask):
+            cell = (2 * GRID_EXTENT) / (GRID_RES - 1)
+            ix = int(np.clip(round((p[0] + GRID_EXTENT) / cell), 0, GRID_RES - 1))
+            iy = int(np.clip(round((p[1] + GRID_EXTENT) / cell), 0, GRID_RES - 1))
+            return mask[iy, ix] > 0.5
+
+        def size_fn(p, real_density=real_density):
+            d = density_at(real_density, np.array([p]))[0]
+            return density_to_spacing_diam(np.array([d]))[0]
+
+        bbox = (real_xy[:, 0].min(), real_xy[:, 1].min(), real_xy[:, 0].max(), real_xy[:, 1].max())
+        gen_xy = seed_positions_blue_noise(inside, size_fn, bbox, spacing_factor=1.0,
+                                            max_points=len(real_xy), seed=seed)
+
+        real_nn = nn_distance_distribution(real_xy)
+        gen_nn = nn_distance_distribution(gen_xy) if len(gen_xy) > 2 else np.array([])
+
+        ax = axes[col]
+        ax.hist(real_nn, bins=30, alpha=0.5, density=True, label=f"real (n={len(real_xy)})")
+        if len(gen_nn) > 0:
+            ax.hist(gen_nn, bins=30, alpha=0.5, density=True, label=f"generated (n={len(gen_xy)})")
+        ax.set_title(name)
+        ax.set_xlabel("nearest-neighbor distance")
+        ax.legend(fontsize=8)
+        print(f"{name}: real NN dist mean/std = {real_nn.mean():.4f}/{real_nn.std():.4f}, "
+              f"n={len(real_xy)}  |  generated (real density) n={len(gen_xy)}, "
+              f"fill={100*len(gen_xy)/len(real_xy):.1f}%, "
+              f"mean/std = {gen_nn.mean() if len(gen_nn) else float('nan'):.4f}/"
+              f"{gen_nn.std() if len(gen_nn) else float('nan'):.4f}")
+
+    fig.suptitle("D6 placement check (REAL density field): nearest-neighbor distance, real vs. generated points")
+    fig.tight_layout()
+    out = OUT_DIR / "d6_placement_check_real_density.png"
+    fig.savefig(out, dpi=130)
+    print(f"saved {out}")
+
+
 if __name__ == "__main__":
     visual_check()
     placement_check()
+    placement_check_real_density()
