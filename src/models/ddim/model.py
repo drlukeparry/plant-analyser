@@ -41,9 +41,16 @@ class FiLMResBlock(nn.Module):
 
 
 class FieldUNet(nn.Module):
-    def __init__(self, in_channels: int = 4, cond_dim: int = 32, base_ch: int = 32,
-                 time_emb_dim: int = 128):
+    def __init__(self, in_channels: int = 4, out_channels: int | None = None, cond_dim: int = 32,
+                 base_ch: int = 32, time_emb_dim: int = 128):
+        """`out_channels` defaults to `in_channels` (the original, everything-
+        is-denoised setup). Pass it explicitly smaller than `in_channels`
+        when some input channels are clean spatial conditioning (e.g. a
+        boundary_sdf crop) concatenated alongside the noisy target rather
+        than something the model is meant to reconstruct -- those channels
+        are still consumed by the down/up path, just never predicted."""
         super().__init__()
+        out_channels = in_channels if out_channels is None else out_channels
         self.time_emb_dim = time_emb_dim
         emb_dim = time_emb_dim
         self.time_mlp = nn.Sequential(
@@ -70,7 +77,7 @@ class FieldUNet(nn.Module):
         self.up1 = FiLMResBlock(base_ch * 2, base_ch, emb_dim)  # concat skip
 
         self.out_norm = nn.GroupNorm(8, base_ch)
-        self.out_conv = nn.Conv2d(base_ch, in_channels, 3, padding=1)
+        self.out_conv = nn.Conv2d(base_ch, out_channels, 3, padding=1)
 
     def forward(self, x, timesteps, cond):
         t_emb = self.time_mlp(sinusoidal_embedding(timesteps, self.time_emb_dim))

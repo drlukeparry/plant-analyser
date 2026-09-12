@@ -26,6 +26,8 @@ GRAPH_CACHE_DIR = out_dir_for("raw")  # kept for backward-compat imports (eval.p
 
 
 def device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     return torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 

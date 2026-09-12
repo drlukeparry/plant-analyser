@@ -1,25 +1,30 @@
 """Phase 4: rasterize a cell-instance label image + its feature table into a
-multi-channel field (signed-distance-to-wall, orientation, size, radial
-distance) — the bridge representation a DDIM would operate on later.
+multi-channel field (signed-distance-to-wall, orientation, size) -- the
+bridge representation a DDIM would operate on later.
 """
 import numpy as np
 from scipy import ndimage as ndi
 
 from src.graph.viz import paint_by_feature
 
-CHANNELS = ["sdf", "orientation", "equivalent_diameter", "radial_distance"]
+CHANNELS = ["sdf", "orientation", "equivalent_diameter"]
+# radial_distance (distance to a single tissue centroid) used to be a 4th
+# target channel here, but it's a flawed proxy for position -- it assumes a
+# single center and breaks down for non-circular/lobed tissue shapes.
+# rasterize_boundary_sdf below (true whole-silhouette distance) replaces it
+# as a conditioning input rather than something the model has to reproduce.
 
 
 def rasterize_field(labels: np.ndarray, node_df, bg_clip: float = 50.0,
                      normalize_by_size: bool = False) -> np.ndarray:
-    """Returns a (H, W, 4) float32 field:
+    """Returns a (H, W, 3) float32 field:
     - sdf: signed distance to nearest wall, positive inside a cell, negative
       in wall/background — a smooth representation of "cell-ness" a
       diffusion model can denoise toward, and from which seeds can be
       re-extracted (local maxima = cell centers).
-    - orientation, equivalent_diameter, radial_distance: each cell's pixels
-      filled with that cell's scalar value (broadcasts the graph's node
-      features into image space).
+    - orientation, equivalent_diameter: each cell's pixels filled with that
+      cell's scalar value (broadcasts the graph's node features into image
+      space).
 
     `bg_clip` bounds the negative (background/wall) side of the SDF to
     at most `-bg_clip` pixels, rather than leaving it as raw unbounded
@@ -63,16 +68,54 @@ def rasterize_field(labels: np.ndarray, node_df, bg_clip: float = 50.0,
 
     orientation = paint_by_feature(labels, node_df, "orientation").astype(np.float32)
     if normalize_by_size:
+        # radial_distance itself is no longer painted as an output channel (see CHANNELS'
+        # docstring note) -- still used here only as the per-image scale for sdf/size
+        # normalization, which is a different role (a scalar, not a per-pixel target).
         tissue_radius = max(float(np.percentile(node_df["radial_distance"], 99)), 1e-6) \
             if len(node_df) > 1 else 1.0
         sdf = sdf / tissue_radius
         size = paint_by_feature(labels, node_df, "equivalent_diameter_norm").astype(np.float32)
-        radial = paint_by_feature(labels, node_df, "radial_distance_norm").astype(np.float32)
     else:
         size = paint_by_feature(labels, node_df, "equivalent_diameter").astype(np.float32)
-        radial = paint_by_feature(labels, node_df, "radial_distance").astype(np.float32)
 
-    return np.stack([sdf, orientation, size, radial], axis=-1)
+    return np.stack([sdf, orientation, size], axis=-1)
+
+
+def rasterize_boundary_sdf(rgb: np.ndarray, tissue_radius: float = 1.0, bg_clip: float = 50.0,
+                            mask: np.ndarray | None = None) -> np.ndarray:
+    """Signed distance to the whole tissue silhouette's boundary -- not to be
+    confused with `rasterize_field`'s per-cell-wall `sdf` channel. Positive
+    inside the tissue, negative outside, using the same coarse holes-filled
+    silhouette segmentation itself uses to exclude background
+    (`classical_watershed.tissue_mask`). This is the true "distance to the
+    edge of the whole structure" signal that `radial_distance` (distance to
+    a single centroid) was only ever a proxy for.
+
+    `bg_clip` bounds the negative (outside-tissue) side, mirroring
+    `rasterize_field`'s treatment of the wall sdf's background side, for the
+    same reason: unbounded distance far from any tissue is dominated by
+    scale that's never useful. The positive (inside) side is left unclipped
+    in raw pixel units before the `tissue_radius` division -- "how deep into
+    the structure is this pixel" up to the structure's own extent is exactly
+    what this channel exists to carry, and it naturally lands near 1.0 at
+    the tissue's core once divided by `tissue_radius`.
+
+    `tissue_radius` should be the same per-image scale `normalize_by_size`
+    uses for the wall sdf (99th-percentile `radial_distance`), so a crop of
+    this channel lands in the same comparable, cross-image units as the
+    target field it's conditioning.
+
+    `mask` lets a precomputed silhouette be passed in (segmentation's own
+    tissue_mask call is not free on a multi-thousand-pixel image) rather
+    than recomputing it here every call.
+    """
+    if mask is None:
+        from src.segmentation.classical_watershed import tissue_mask as compute_tissue_mask
+        mask = compute_tissue_mask(rgb)
+    dist_in = ndi.distance_transform_edt(mask)
+    dist_out = np.clip(ndi.distance_transform_edt(~mask), 0, bg_clip)
+    sdf = np.where(mask, dist_in, -dist_out).astype(np.float32)
+    return sdf / tissue_radius
 
 
 if __name__ == "__main__":
